@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/iam-orsu/ciotx/server/internal/db"
 	"github.com/iam-orsu/ciotx/server/internal/llm"
 	"github.com/iam-orsu/ciotx/server/internal/types"
 )
@@ -52,6 +53,15 @@ type ScanResponse struct {
 func ScanHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// ── Quota check (DB-backed licenses only; master key bypasses) ────
+	license := licenseFromContext(r.Context())
+	if license != nil && license.IsQuotaExceeded() {
+		writeError(w, http.StatusPaymentRequired,
+			fmt.Sprintf("monthly scan limit reached (%d/%d) — upgrade your plan",
+				license.ScansThisMonth, license.MaxScansPerMonth))
 		return
 	}
 
@@ -125,6 +135,34 @@ func ScanHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+
+	// ── Post-scan accounting (non-fatal — scan is already done) ──────
+	// Run in a background goroutine so the HTTP response is not delayed.
+	if license != nil {
+		clientVersion := strings.TrimPrefix(r.Header.Get("User-Agent"), "ciotx/")
+		criticalCount := 0
+		highCount := 0
+		for _, f := range final {
+			switch f.Severity {
+			case "Critical":
+				criticalCount++
+			case "High":
+				highCount++
+			}
+		}
+		durationMS := time.Since(startTime).Milliseconds()
+		go func() {
+			bgCtx, bgCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer bgCancel()
+			if err := db.IncrementScanCount(bgCtx, license.ID); err != nil {
+				fmt.Printf("[server] warn: increment scan count: %v\n", err)
+			}
+			if err := db.RecordScan(bgCtx, license.ID, clientVersion,
+				len(final), criticalCount, highCount, durationMS); err != nil {
+				fmt.Printf("[server] warn: record scan history: %v\n", err)
+			}
+		}()
+	}
 }
 
 // =====================================================================

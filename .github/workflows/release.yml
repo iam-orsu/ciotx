@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+
+      - name: Extract version info
+        id: meta
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          COMMIT="${GITHUB_SHA::8}"
+          BUILD_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "commit=${COMMIT}"   >> "$GITHUB_OUTPUT"
+          echo "date=${BUILD_DATE}" >> "$GITHUB_OUTPUT"
+
+      - name: Cross-compile CLI binaries
+        working-directory: cli
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          COMMIT: ${{ steps.meta.outputs.commit }}
+          BUILD_DATE: ${{ steps.meta.outputs.date }}
+        run: |
+          mkdir -p ../dist
+          LDFLAGS="-s -w \
+            -X main.Version=${VERSION} \
+            -X main.Commit=${COMMIT} \
+            -X main.BuildDate=${BUILD_DATE}"
+
+          CGO_ENABLED=0 GOOS=linux   GOARCH=amd64  go build -ldflags="${LDFLAGS}" -o ../dist/ciotx-linux-amd64       ./cmd/ciotx
+          CGO_ENABLED=0 GOOS=linux   GOARCH=arm64  go build -ldflags="${LDFLAGS}" -o ../dist/ciotx-linux-arm64       ./cmd/ciotx
+          CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64  go build -ldflags="${LDFLAGS}" -o ../dist/ciotx-darwin-amd64      ./cmd/ciotx
+          CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64  go build -ldflags="${LDFLAGS}" -o ../dist/ciotx-darwin-arm64      ./cmd/ciotx
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64  go build -ldflags="${LDFLAGS}" -o ../dist/ciotx-windows-amd64.exe ./cmd/ciotx
+
+      - name: Generate SHA256 checksums
+        working-directory: dist
+        run: sha256sum ciotx-* > checksums.txt && cat checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ciotx ${{ steps.meta.outputs.version }}
+          generate_release_notes: true
+          files: |
+            dist/ciotx-linux-amd64
+            dist/ciotx-linux-arm64
+            dist/ciotx-darwin-amd64
+            dist/ciotx-darwin-arm64
+            dist/ciotx-windows-amd64.exe
+            dist/checksums.txt

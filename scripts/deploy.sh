@@ -61,7 +61,7 @@ set -a
 source <(grep -v '^#' .env | grep -v '^$')
 set +a
 
-REQUIRED_VARS=(DOMAIN_NAME VPS_SERVER_IP SSL_EMAIL LLM_API_KEY MASTER_LICENSE_KEY)
+REQUIRED_VARS=(DOMAIN_NAME VPS_SERVER_IP SSL_EMAIL LLM_API_KEY MASTER_LICENSE_KEY POSTGRES_PASSWORD)
 for var in "${REQUIRED_VARS[@]}"; do
     val="${!var:-}"
     [[ -z "$val" ]] && error "$var is not set in .env"
@@ -74,6 +74,9 @@ done
 
 [[ ${#MASTER_LICENSE_KEY} -lt 20 ]] \
     && warn "MASTER_LICENSE_KEY is very short — use a long random value in production."
+
+[[ ${#POSTGRES_PASSWORD} -lt 16 ]] \
+    && warn "POSTGRES_PASSWORD is very short — use at least 32 random chars in production."
 
 success "Configuration validated:"
 info "  Domain : ${DOMAIN_NAME}"
@@ -353,6 +356,12 @@ echo -e "  ${BOLD}Your master license key:${NC} ${MASTER_LICENSE_KEY}"
 echo ""
 echo -e "  ${BOLD}User install command:${NC}"
 echo -e "  ${BLUE}curl -fsSL https://${DOMAIN_NAME}/install.sh | sh${NC}"
+echo ""
+echo -e "  ${BOLD}Issue a customer license key:${NC}"
+echo -e "  ${BLUE}docker compose exec api /ciotx-server license create --org \"Acme Corp\" --email user@acme.com --plan pro --scans 500${NC}"
+echo ""
+echo -e "  ${BOLD}List all licenses:${NC}"
+echo -e "  ${BLUE}docker compose exec api /ciotx-server license list${NC}"
 echo ""
 echo -e "  ${BOLD}Useful commands:${NC}"
 echo -e "  ${BLUE}docker compose logs -f api${NC}    # live API logs"

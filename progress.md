@@ -23,7 +23,7 @@
 | Phase | Description | Status | Target / Notes |
 |:---|:---|:---:|:---|
 | **Phase 1** | **Core SaaS Infrastructure & Engine** | **COMPLETED (v1.0.0)** | Full CLI, Server, Nginx, Docker, deploy.sh, QA passed |
-| **Phase 2** | **Database-Backed License Management & CI/CD** | **READY TO START** | PostgreSQL, schema migrations, key generation, GitHub Actions |
+| **Phase 2** | **Database-Backed License Management & CI/CD** | **COMPLETED (v2.0.0)** | PostgreSQL, schema migrations, key generation, quota enforcement, admin CLI, GitHub Actions |
 | **Phase 3** | **Usage Metering, Quotas & Rate Limits** | Planned | Tiered plans (Free/Pro/Enterprise), monthly quota enforcement |
 | **Phase 4** | **Operator Admin Control Plane & Web Dashboard** | Planned | Web UI for key issuance, active scan metrics, revenue analytics |
 | **Phase 5** | **Enterprise Scanners, Integrations & Distributed Queue** | Planned | Redis/Asynq workers, GitHub Actions scanner bot, Slack/Jira alerts |
@@ -160,73 +160,108 @@ A focused quality pass was applied after Phase 1 to close the gaps identified in
 
 ---
 
-## 5. Phase 2 Plan: Database-Backed License Management & CI/CD
+## 5. Phase 2 — Database-Backed License Management & CI/CD (COMPLETED v2.0.0)
 
-### Goals
-Transition from static single-key authorization (`MASTER_LICENSE_KEY`) to a scalable, relational database model supporting individual customer licenses, expiration dates, plan limits, and automated releases.
+### What Was Built
 
-### Work Breakdown:
+#### A. PostgreSQL Database (`server/internal/db/`)
 
-#### Task 2.1: PostgreSQL & Migration Infrastructure
-* Add a `postgres:16-alpine` service to `docker-compose.yml` with encrypted credentials, persistent volumes, and health checks.
-* Implement database connection pooling and migration runner in `server/internal/db/`.
-* Write SQL schema migrations:
-  * `001_create_licenses.sql`:
-    ```sql
-    CREATE TABLE licenses (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        license_key VARCHAR(64) UNIQUE NOT NULL,
-        organization VARCHAR(255) NOT NULL,
-        email VARCHAR(255) NOT NULL,
-        plan VARCHAR(32) NOT NULL DEFAULT 'starter', -- starter, pro, enterprise
-        max_scans_per_month INT NOT NULL DEFAULT 50,
-        scans_this_month INT NOT NULL DEFAULT 0,
-        is_active BOOLEAN NOT NULL DEFAULT TRUE,
-        expires_at TIMESTAMPTZ,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-    CREATE INDEX idx_licenses_key ON licenses(license_key);
-    ```
-  * `002_create_scans.sql`:
-    ```sql
-    CREATE TABLE scan_history (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        license_id UUID REFERENCES licenses(id) ON DELETE CASCADE,
-        findings_count INT NOT NULL DEFAULT 0,
-        critical_count INT NOT NULL DEFAULT 0,
-        high_count INT NOT NULL DEFAULT 0,
-        duration_ms BIGINT NOT NULL,
-        client_version VARCHAR(32),
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-    CREATE INDEX idx_scan_history_license ON scan_history(license_id);
-    ```
+**`db.go`** — Connection pool using `pgx/v5/pgxpool`:
+- `Init(ctx)`: opens pool (max 10 / min 2 conns), pings before accepting traffic
+- `Pool()`: returns the active pool; panics if Init not called (fail-fast, not silent nil deref)
+- `Close()`: drains pool on graceful shutdown
+- Reads `DATABASE_URL` (preferred) or individual `POSTGRES_*` env vars
+- DB failure is non-fatal at startup — master key fallback still works for local dev
 
-#### Task 2.2: License Management Handlers & CLI Admin Subcommands
-* Refactor `server/handlers/auth.go` to query Postgres instead of just comparing against `MASTER_LICENSE_KEY` (keep master key as emergency backdoor/override).
-* Implement Server CLI / Admin API to generate keys:
-  ```bash
-  ciotx-server license create --org "Acme Corp" --email "sec@acme.com" --plan pro --scans 500
-  ciotx-server license revoke <key>
-  ciotx-server license list
-  ```
+**`migrate.go`** — Embedded migration runner:
+- SQL files embedded via `//go:embed migrations/*.sql`
+- Applied in lexicographic order, tracked in `schema_migrations` table
+- Idempotent — already-applied migrations are skipped on restart
+- Run automatically at server startup before accepting requests
 
-#### Task 2.3: GitHub Actions CI/CD Pipeline
-* Create `.github/workflows/ci.yml`:
-  * Runs on every PR / push to `main`.
-  * Runs `go vet ./...`, `golangci-lint`, and unit tests for both `cli/` and `server/`.
-* Create `.github/workflows/release.yml`:
-  * Triggers on tag push (e.g. `v1.0.1`).
-  * Cross-compiles binaries for all 5 platforms.
-  * Creates GitHub Release with checksums (SHA256).
-  * Automatically updates the `/releases/` distribution endpoint on the server.
+**`license.go`** — License CRUD:
+- `GetLicenseByKey`: single query; returns `pgx.ErrNoRows` if not found (not a generic error)
+- `IncrementScanCount`: atomic SQL UPDATE that also resets `scan_month` if the calendar month changed — no background job needed
+- `RecordScan`: writes to `scan_history` after each completed scan
+- `CreateLicense`: generates `ciotx_<48-hex-chars>` key, inserts into DB
+- `RevokeLicense`: sets `is_active = FALSE` (preserves history)
+- `ListLicenses`: returns all licenses newest-first
 
-#### Task 2.4: Integration Testing
-* Write end-to-end integration tests (`server/tests/integration_test.go`):
-  * Test license key validation (valid, expired, revoked, quota exceeded).
-  * Test scan ingestion with mock LLM backend.
-  * Test rate limiting and error response formatting.
+**SQL Migrations:**
+- `001_create_licenses.sql`: `licenses` table with `scan_month VARCHAR(7)` for lazy monthly quota reset
+- `002_create_scan_history.sql`: `scan_history` table with foreign key and time indexes
+
+#### B. Updated Auth Handler (`server/handlers/auth.go`)
+
+`resolveKey` two-step lookup:
+1. DB lookup via `db.GetLicenseByKey` — enforces `is_active`, `IsExpired()`
+2. Master key fallback via `crypto/subtle.ConstantTimeCompare` — returns `nil` license (admin bypass, no quota)
+
+Auth middleware now attaches the `*db.License` to the request context via `context.WithValue` so the scan handler can access it without a second DB round-trip.
+
+`AuthVerifyHandler` now returns `plan` and `organization` in the response so the CLI can display plan info after login.
+
+#### C. Quota Enforcement (`server/handlers/scan.go`)
+
+`ScanHandler` now:
+1. Reads license from context before any work
+2. If DB-backed license: checks `IsQuotaExceeded()` → returns HTTP 402 with clear message
+3. Runs scan pipeline (unchanged)
+4. After response sent: background goroutine increments scan counter and writes scan history row
+5. Master key auth: bypasses quota entirely
+
+Monthly quota reset is lazy: `IncrementScanCount` SQL checks `scan_month != current_month` and resets to 1 if so. No cron job, no race condition.
+
+#### D. Admin CLI (`server/admin/license.go`)
+
+The server binary is now dual-purpose. When called with `license` as first arg, runs admin commands instead of starting the server:
+
+```bash
+# Issue a new key
+docker compose exec api /ciotx-server license create \
+  --org "Acme Corp" --email sec@acme.com --plan pro --scans 500 --expires 365
+
+# Revoke a key
+docker compose exec api /ciotx-server license revoke ciotx_abc123...
+
+# List all licenses (tabular output)
+docker compose exec api /ciotx-server license list
+```
+
+#### E. Docker & Environment
+
+`docker-compose.yml` additions:
+- `postgres:16-alpine` service with persistent named volume, health check, resource limits
+- `api` service now depends on `postgres` health check before starting
+- `POSTGRES_*` env vars passed to api container
+
+`.env.example` updated with `POSTGRES_PASSWORD` (required, must be strong).
+
+`deploy.sh` updated:
+- `POSTGRES_PASSWORD` added to required vars validation
+- Warns if password is shorter than 16 chars
+- Prints license management commands in post-deploy summary
+
+#### F. GitHub Actions
+
+**`ci.yml`** — runs on every push/PR to `main`:
+- Spins up a real `postgres:16-alpine` service container for integration-ready tests
+- `go vet ./...` on both modules
+- `go test ./... -race -timeout 120s` on both modules
+- Separate build smoke-test job (compiles server + CLI linux/amd64)
+
+**`release.yml`** — runs on `v*.*.*` tag push:
+- Cross-compiles CLI for all 5 platforms
+- Generates `checksums.txt` (SHA256)
+- Creates GitHub Release via `softprops/action-gh-release@v2` with all binaries attached
+
+### Architectural Invariants Added (Phase 2)
+
+1. **DB is non-fatal at startup**: server starts even if Postgres is unreachable. Master key still works. This prevents a DB blip from taking down the entire service.
+2. **Quota check is pre-scan**: rejection happens before any LLM tokens are spent. HTTP 402 is the correct status code — the CLI already handles it with "scan limit reached — upgrade your plan".
+3. **Post-scan accounting is fire-and-forget**: scan history write happens in a background goroutine after the HTTP response is flushed. A failed write logs a warning but never fails a scan.
+4. **Monthly reset is lazy SQL**: no background job or cron needed. The `scan_month` column is the single source of truth.
+5. **Admin CLI uses same binary**: `ciotx-server license ...` — no separate admin binary to build, deploy, or secure.
 
 ---
 
