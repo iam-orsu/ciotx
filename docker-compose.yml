@@ -49,8 +49,10 @@ services:
       - certbot-certs:/etc/letsencrypt:ro
       # ACME challenge webroot
       - certbot-webroot:/var/www/certbot
-      # install.sh served statically
-      - ./scripts/deploy.sh:/var/www/static/install.sh:ro
+      # Generated install.sh (contains real DOMAIN_NAME, built by deploy.sh)
+      - ./scripts/install.sh:/var/www/static/install.sh:ro
+      # Pre-built CLI binaries served at /releases/
+      - ./data/static/releases:/var/www/static/releases:ro
     networks:
       - ciotx-internal
     stop_grace_period: 30s

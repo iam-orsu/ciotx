@@ -5,10 +5,16 @@
 cli/ciotx
 cli/ciotx.exe
 dist/
+data/
 *.o
 *.a
 *.test
 *.out
+
+# ── Generated files (created by deploy.sh) ───
+# install.sh is regenerated on every deploy with the real DOMAIN_NAME
+scripts/install.sh
+
 
 # ── Environment (NEVER commit these) ────────
 .env

@@ -111,6 +111,15 @@ server {
         add_header Pragma        "no-cache";
     }
 
+    # ── CLI Binary Downloads (/releases/ciotx-linux-amd64 etc.) ────
+    location /releases/ {
+        root /var/www/static;
+        autoindex off;
+        add_header Content-Type        "application/octet-stream";
+        add_header Content-Disposition "attachment";
+        add_header Cache-Control       "public, max-age=3600";
+    }
+
     # ── Block common scanner/probe paths ───────────────────────────
     location ~ ^/(wp-admin|\.env|\.git|phpinfo) {
         return 404;

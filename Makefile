@@ -5,13 +5,20 @@
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT      := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE  := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
-API_ENDPOINT ?= https://api.ciotx.ai
+
+# Read DOMAIN_NAME from .env if it exists, fallback to localhost for dev
+-include .env
+export
+DOMAIN_NAME ?= localhost
+API_ENDPOINT := https://$(DOMAIN_NAME)
+WEBSITE_URL  := https://$(DOMAIN_NAME)
 
 CLI_LDFLAGS := -s -w \
 	-X main.Version=$(VERSION) \
 	-X main.Commit=$(COMMIT) \
 	-X main.BuildDate=$(BUILD_DATE) \
-	-X main.APIEndpoint=$(API_ENDPOINT)
+	-X main.APIEndpoint=$(API_ENDPOINT) \
+	-X main.WebsiteURL=$(WEBSITE_URL)
 
 CLI_DIR     := ./cli
 SERVER_DIR  := ./server

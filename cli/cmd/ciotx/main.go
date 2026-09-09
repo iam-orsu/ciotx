@@ -21,10 +21,12 @@ import (
 	"github.com/iam-orsu/ciotx/cli/pkg/scanner"
 )
 
-// Build metadata — injected via: go build -ldflags "-X main.Version=x.y.z -X main.Commit=abc -X main.BuildDate=..."
-// Falls back to safe defaults when built without ldflags (e.g., go run).
+// Build metadata — ALL injected via ldflags at build time by deploy.sh / Makefile.
+// The operator sets DOMAIN_NAME in .env; deploy.sh compiles these in.
+// Zero hardcoded domains ship in the binary.
 var (
-	APIEndpoint = "https://api.ciotx.ai" // overridden by Makefile
+	APIEndpoint = "http://localhost:8080" // always overridden: -X main.APIEndpoint=https://DOMAIN_NAME
+	WebsiteURL  = "http://localhost:8080" // always overridden: -X main.WebsiteURL=https://DOMAIN_NAME
 	Version     = "dev"
 	Commit      = "unknown"
 	BuildDate   = "unknown"
@@ -89,7 +91,7 @@ func cmdAuthLogin() int {
 
 	if key == "" {
 		fmt.Println("\n[!] License key cannot be empty.")
-		fmt.Println("    Get your key at https://ciotx.ai")
+		fmt.Printf("    Get your key at %s\n", WebsiteURL)
 		return 1
 	}
 
@@ -239,7 +241,7 @@ func cmdScan(target string) int {
 }
 
 func printHelp() {
-	fmt.Println(`
+	fmt.Printf(`
   ciotx — Security Auditor
 
   Usage:
@@ -248,7 +250,8 @@ func printHelp() {
     ciotx scan /path/to/repo  Scan a specific directory
     ciotx version             Print version and build info
 
-  Get your license key at https://ciotx.ai`)
+  Get your license key at %s
+`, WebsiteURL)
 }
 
 func absPath(p string) string {
