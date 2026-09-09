@@ -115,6 +115,51 @@ Any future code changes or agent interactions must strictly follow these rules:
 
 ---
 
+## 4.5. Post-Phase-1 Quality Pass (v1.0.1) — COMPLETED
+
+A focused quality pass was applied after Phase 1 to close the gaps identified in a Phase 1 review. No new features were added — all changes are correctness, quality, and test coverage improvements.
+
+### Issues Fixed
+
+#### A. Variable Shadowing — `server/internal/llm/audit.go`
+- **Problem**: `ctx := ""` on line 58 shadowed the outer `ctx context.Context` function parameter. If Go tooling or a future refactor relied on `ctx` inside that block, it would silently use the string instead of the context.
+- **Fix**: Renamed the local string variable to `surroundingCode` throughout the block.
+
+#### B. Duplicate `max`/`min` helpers (Go 1.21 builtins)
+- **Problem**: Custom `max(a, b int)` and `min(a, b int)` functions were copy-pasted into four separate files: `server/handlers/scan.go`, `server/internal/llm/audit.go`, `server/internal/llm/client.go`, and `cli/pkg/scanner/ingest.go`.
+- **Fix**: Removed all four custom definitions. Both modules require `go 1.21`, which ships `min` and `max` as generic builtins — all call sites work identically.
+
+#### C. `EstimatedCostUSD` Always Zero
+- **Problem**: The `estimated_cost_usd` field was present in the API response but was always `0.0`. Token usage was tracked but never converted to dollars.
+- **Fix**:
+  - Added `CostUSD(u Usage, model string) float64` function to `server/internal/llm/client.go` with DeepSeek's published per-model pricing (deepseek-reasoner and deepseek-chat rates, cache-hit vs. cache-miss differentiated).
+  - Separated combined `usage` into `discoveryUsage` and `auditUsage` in `ScanHandler` so each model's tokens are priced at the correct rate.
+  - `EstimatedCostUSD` in `ScanResponse.Stats` is now populated with the real computed value.
+
+#### D. 25MB Total Codebase Cap Not Enforced
+- **Problem**: `progress.md` and the Phase 1 description documented a 25MB total codebase cap, but `cli/pkg/scanner/ingest.go` only enforced a 512KB per-file limit. A repo with thousands of small files could exceed 25MB and cause memory exhaustion.
+- **Fix**: Added `maxCodebaseBytes = 25 * 1024 * 1024` constant and a running `totalBytes` counter in `IngestCodebase`. When the next file would push the total over 25MB, the walk returns `filepath.SkipAll` to stop cleanly. Named constants `maxFileBytes` and `maxCodebaseBytes` replace the inline magic numbers.
+
+#### E. Zero Tests — Now Fixed
+- **Problem**: No test files existed anywhere in the project.
+- **Fix**: Added 4 test files with 25 test cases total covering the core logic:
+
+  | File | What it tests |
+  |:---|:---|
+  | `server/internal/llm/discovery_test.go` | `parseFindings` (wrapped JSON, code fences, empty, garbage, Windows paths), `normalizeSeverity` (all variants) |
+  | `server/internal/llm/client_test.go` | `CostUSD` for discovery model, audit model, and zero usage |
+  | `server/handlers/scan_test.go` | `verifyFindings` (good finding, hallucinated file, empty evidence, line correction, deduplication), `extractFilesContent` (basic, multi-file, multi-chunk) |
+  | `cli/pkg/scanner/ingest_test.go` | `FormatNumberedFile`, `PartitionChunks` (single/multi/empty), `IngestCodebase` (basic, ignored dirs, large file skip, binary skip) |
+  | `cli/pkg/report/report_test.go` | `WriteJSON` (round-trip, empty), `WriteHTML` (valid HTML, XSS escaping, empty state, severity sorting) |
+
+  All tests pass: `go test ./...` — green across both `server/` and `cli/` modules.
+
+### Architectural Invariants Added
+- `CostUSD` is the single source of truth for token cost calculation. Per-model pricing is in named constants in `client.go` alongside a source URL comment.
+- Discovery and audit usages **must** be tracked separately in `ScanHandler` to preserve per-model pricing accuracy.
+
+---
+
 ## 5. Phase 2 Plan: Database-Backed License Management & CI/CD
 
 ### Goals

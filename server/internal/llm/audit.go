@@ -55,7 +55,7 @@ func RunAudit(ctx context.Context, client *Client, findings []*types.Finding, fi
 
 	var items []auditItem
 	for idx, f := range findings {
-		ctx := ""
+		surroundingCode := ""
 		if lines, ok := filesContent[f.File]; ok {
 			startIdx := max(0, f.LineStart-11)
 			endIdx := min(len(lines), f.LineEnd+10)
@@ -63,7 +63,7 @@ func RunAudit(ctx context.Context, client *Client, findings []*types.Finding, fi
 			for i := startIdx; i < endIdx; i++ {
 				sb.WriteString(fmt.Sprintf("%04d | %s\n", i+1, lines[i]))
 			}
-			ctx = sb.String()
+			surroundingCode = sb.String()
 		}
 		items = append(items, auditItem{
 			Index:           idx,
@@ -75,7 +75,7 @@ func RunAudit(ctx context.Context, client *Client, findings []*types.Finding, fi
 			Evidence:        f.Evidence,
 			DataFlow:        f.DataFlow,
 			Description:     f.Description,
-			SurroundingCode: ctx,
+			SurroundingCode: surroundingCode,
 		})
 	}
 
@@ -156,9 +156,3 @@ Return strictly valid JSON with {"verdicts": [...]}`, len(items), string(itemsJS
 	return surviving, rejected, nil
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

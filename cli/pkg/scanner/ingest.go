@@ -52,9 +52,16 @@ type CodeChunk struct {
 	PayloadText string
 }
 
+const (
+	maxFileBytes     = 512 * 1024       // 512 KB per file
+	maxCodebaseBytes = 25 * 1024 * 1024 // 25 MB total
+)
+
 // IngestCodebase walks the target directory and returns all scannable source files.
+// It enforces a per-file limit of 512 KB and a total codebase limit of 25 MB.
 func IngestCodebase(rootDir string) ([]*SourceFile, error) {
 	var files []*SourceFile
+	totalBytes := 0
 
 	err := filepath.WalkDir(rootDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -83,7 +90,7 @@ func IngestCodebase(rootDir string) ([]*SourceFile, error) {
 		}
 
 		// Skip binary files (>512KB or NUL bytes in first 8KB)
-		if len(content) > 512*1024 {
+		if len(content) > maxFileBytes {
 			return nil
 		}
 		sample := content
@@ -95,6 +102,12 @@ func IngestCodebase(rootDir string) ([]*SourceFile, error) {
 				return nil
 			}
 		}
+
+		// Stop collecting once total exceeds 25MB to avoid memory exhaustion.
+		if totalBytes+len(content) > maxCodebaseBytes {
+			return filepath.SkipAll
+		}
+		totalBytes += len(content)
 
 		text := string(content)
 		lines := strings.Split(text, "\n")
@@ -174,9 +187,3 @@ func PartitionChunks(files []*SourceFile, targetTokens int) []*CodeChunk {
 	return chunks
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}

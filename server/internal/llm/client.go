@@ -61,6 +61,33 @@ type Usage struct {
 	CacheMissTokens  int
 }
 
+// DeepSeek pricing (USD per million tokens, as of 2025-Q1).
+// Source: https://api-docs.deepseek.com/quick_start/pricing
+const (
+	priceReasonerCacheMiss = 0.55 // deepseek-reasoner input, cache miss
+	priceReasonerCacheHit  = 0.14 // deepseek-reasoner input, cache hit
+	priceReasonerOutput    = 2.19 // deepseek-reasoner output
+	priceChatCacheMiss     = 0.27 // deepseek-chat input, cache miss
+	priceChatCacheHit      = 0.07 // deepseek-chat input, cache hit
+	priceChatOutput        = 1.10 // deepseek-chat output
+)
+
+// CostUSD returns the estimated USD cost for a Usage at the given model's rates.
+// model must be one of the model* constants exported by this package.
+func CostUSD(u Usage, model string) float64 {
+	const m = 1_000_000.0
+	switch model {
+	case modelDiscovery:
+		return (float64(u.CacheMissTokens)*priceReasonerCacheMiss+
+			float64(u.CacheHitTokens)*priceReasonerCacheHit)/m +
+			float64(u.CompletionTokens)*priceReasonerOutput/m
+	default: // modelAudit (deepseek-chat)
+		return (float64(u.CacheMissTokens)*priceChatCacheMiss+
+			float64(u.CacheHitTokens)*priceChatCacheHit)/m +
+			float64(u.CompletionTokens)*priceChatOutput/m
+	}
+}
+
 // Client is the internal LLM provider client.
 // Its existence and configuration are invisible to ciotx end users.
 type Client struct {
@@ -192,9 +219,3 @@ func NewMessages(system, user string) []message {
 	}
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
