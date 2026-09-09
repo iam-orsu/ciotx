@@ -5,6 +5,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -141,8 +142,11 @@ type HistoryResponse struct {
 
 // Status fetches the authenticated user's plan and quota information.
 func (c *Client) Status() (*StatusResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	url := c.endpoint + "/v1/status"
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -176,8 +180,11 @@ func (c *Client) Status() (*StatusResponse, error) {
 // History fetches the authenticated user's recent scan records.
 // limit must be 1–50; values outside this range are clamped server-side.
 func (c *Client) History(limit int) (*HistoryResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	url := fmt.Sprintf("%s/v1/history?limit=%d", c.endpoint, limit)
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

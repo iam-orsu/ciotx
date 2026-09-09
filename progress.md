@@ -441,6 +441,30 @@ Output includes: plan, quota, total all-time scans, last scan time, expiry, and 
 
 ---
 
+## 6.1. Post-Phase-3 QA Audit (v3.0.1) — COMPLETED
+
+A focused QA pass across all Phase 3 code. Three issues found and fixed.
+
+### Issues Fixed
+
+#### A. `Status()` and `History()` hang for 35 minutes if server unreachable (`cli/pkg/api/client.go`)
+- **Problem**: Both methods used the shared `http.Client` (35-minute timeout). If the server was down, `ciotx status` and `ciotx history` would hang for 35 minutes before returning an error. Only the scan method needs a long timeout.
+- **Fix**: Added `context.WithTimeout(context.Background(), 10*time.Second)` in each method and switched to `http.NewRequestWithContext` so the per-request context overrides the shared client timeout.
+
+#### B. `runStats` silently swallows `GetScanHistory` error (`server/admin/license.go`)
+- **Problem**: `if err != nil || len(records) == 0 { return }` combined the error and empty cases. When `GetScanHistory` returned a DB error, the error was dropped silently with no output.
+- **Fix**: Split into two separate checks. When `err != nil`, prints a `[!] Warning:` message to stderr. When `len(records) == 0`, exits quietly as before.
+
+#### C. Incorrect `//nolint:errcheck` on bool-returning call (`server/internal/ratelimit/ratelimit_test.go`)
+- **Problem**: `l.Acquire("z") //nolint:errcheck` — `Acquire` returns `bool`, not `error`. The `errcheck` lint directive is meaningless and incorrect.
+- **Fix**: Changed to `_ = l.Acquire("z")` — explicit discard of the bool, which is the standard Go pattern and passes all linters correctly.
+
+### Verification
+- `go build ./...` passes cleanly for both `server/` and `cli/` modules.
+- `go test ./...` — all tests green.
+
+---
+
 ## 7. Phase 4 & Beyond: Future Architecture
 
 ### Phase 4: Operator Admin Web Control Plane

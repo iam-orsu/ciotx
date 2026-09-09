@@ -68,7 +68,7 @@ func TestCount(t *testing.T) {
 	if l.Count("z") != 0 {
 		t.Fatal("Count on unseen key should be 0")
 	}
-	l.Acquire("z") //nolint:errcheck
+	_ = l.Acquire("z")
 	if l.Count("z") != 1 {
 		t.Fatalf("expected Count=1, got %d", l.Count("z"))
 	}

@@ -244,7 +244,12 @@ func runStats(ctx context.Context, args []string) {
 	fmt.Printf("  Created     : %s\n", license.CreatedAt.Format("2006-01-02"))
 
 	records, err := db.GetScanHistory(ctx, license.ID, 20)
-	if err != nil || len(records) == 0 {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  [!] Warning: could not fetch scan history: %v\n", err)
+		fmt.Println()
+		return
+	}
+	if len(records) == 0 {
 		fmt.Println()
 		return
 	}
