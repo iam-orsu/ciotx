@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/iam-orsu/ciotx/server/internal/llm"
 	"github.com/iam-orsu/ciotx/server/internal/types"
@@ -70,37 +72,36 @@ func ScanHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Context with timeout — prevent a single scan from hanging the server indefinitely
+	_, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
+	defer cancel()
+
+	startTime := time.Now()
 	client := llm.NewClient()
 	usage := &llm.Usage{}
 	var usageMu sync.Mutex
 
-	// ── Phase 1: Discovery pass across all chunks ──────────────────────
+	// ── Phase 1: Discovery pass — sequential (required by rate limits)
 	var candidateFindings []*types.Finding
-	var findingsMu sync.Mutex
-
-	// Sequential processing (reasoner model requires it for rate limits)
 	for _, chunk := range req.Chunks {
 		findings, err := llm.RunDiscovery(client, chunk.ChunkID, chunk.Payload, usage, &usageMu)
 		if err != nil {
-			// Log server-side but don't expose internal error to user
-			fmt.Printf("[server] chunk #%d analysis error: %v\n", chunk.ChunkID, err)
+			// Log server-side only — never expose internal errors to users
+			fmt.Printf("[server] chunk #%d error: %v\n", chunk.ChunkID, err)
 			continue
 		}
-		findingsMu.Lock()
 		candidateFindings = append(candidateFindings, findings...)
-		findingsMu.Unlock()
-		fmt.Printf("[server] chunk #%d: %d candidate findings\n", chunk.ChunkID, len(findings))
+		fmt.Printf("[server] chunk #%d: %d candidates\n", chunk.ChunkID, len(findings))
 	}
 
-	// ── Phase 2: Evidence re-anchoring (drop hallucinations) ────────────
-	// Build a simple files map from chunk payloads for evidence verification
+	// ── Phase 2: Evidence re-anchoring — drop hallucinations
 	filesContent := extractFilesContent(req.Chunks)
 	verified, dropped := verifyFindings(candidateFindings, filesContent)
-	fmt.Printf("[server] verified: %d findings (%d hallucinations dropped)\n", len(verified), dropped)
+	fmt.Printf("[server] verified: %d (%d hallucinations dropped)\n", len(verified), dropped)
 
-	// ── Phase 3: Adversarial audit (eliminate false positives) ─────────
+	// ── Phase 3: Adversarial audit — filter false positives
 	final, rejected, _ := llm.RunAudit(client, verified, filesContent, usage, &usageMu)
-	fmt.Printf("[server] final: %d findings (%d false positives filtered)\n", len(final), rejected)
+	fmt.Printf("[server] final: %d (%d false positives filtered)\n", len(final), rejected)
 
 	if final == nil {
 		final = []*types.Finding{}
@@ -111,6 +112,7 @@ func ScanHandler(w http.ResponseWriter, r *http.Request) {
 		Stats: ScanStats{
 			HallucinationsDropped:  dropped,
 			FalsePositivesFiltered: rejected,
+			DurationSeconds:        time.Since(startTime).Seconds(),
 		},
 	}
 

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -41,22 +42,21 @@ func AuthVerifyHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// isValidKey validates the license key.
-// Phase 1: simple env-var based validation.
+// isValidKey validates the license key using constant-time comparison to prevent timing attacks.
+// Phase 1: exact match against MASTER_LICENSE_KEY environment variable only.
+// Phase 2: will validate against PostgreSQL license keys table with plan enforcement.
 func isValidKey(key string) bool {
 	if key == "" {
 		return false
 	}
 	master := os.Getenv("MASTER_LICENSE_KEY")
-	if master != "" && key == master {
-		return true
-	}
-	// Keys must start with "ciotx_" prefix
-	if !strings.HasPrefix(key, "ciotx_") {
+	if master == "" {
+		// No master key configured — deny all (fail-secure, not fail-open)
 		return false
 	}
+	// Constant-time comparison prevents timing side-channel attacks
+	return subtle.ConstantTimeCompare([]byte(key), []byte(master)) == 1
 	// TODO Phase 2: validate against PostgreSQL license keys table
-	return true
 }
 
 // AuthMiddleware validates the Bearer token on protected routes.

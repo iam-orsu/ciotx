@@ -83,7 +83,7 @@ func DiscoveryModel() string { return modelDiscovery }
 // AuditModel returns the internal model name used for audit.
 func AuditModel() string { return modelAudit }
 
-// Chat sends a request to the internal LLM provider with retry and backoff.
+// Chat sends a request to the internal LLM provider with retry and exponential backoff.
 // All provider-specific metadata is stripped from the returned content string.
 func (c *Client) Chat(model string, messages []message, jsonMode bool, maxTokens int) (string, Usage, error) {
 	req := chatRequest{
@@ -103,21 +103,23 @@ func (c *Client) Chat(model string, messages []message, jsonMode bool, maxTokens
 	}
 
 	maxRetries := 5
+	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		content, usage, err := c.doRequest(body)
 		if err == nil {
 			return content, usage, nil
 		}
+		lastErr = err
 
+		// Exponential backoff: 5s, 10s, 20s, 40s
 		if attempt < maxRetries-1 {
-			wait := time.Duration(attempt+1) * 10 * time.Second
+			wait := time.Duration(5*(1<<attempt)) * time.Second
 			time.Sleep(wait)
-			continue
 		}
-		return "", Usage{}, fmt.Errorf("analysis service temporarily unavailable after %d attempts", maxRetries)
 	}
-	return "", Usage{}, fmt.Errorf("analysis service unavailable")
+	return "", Usage{}, fmt.Errorf("analysis service temporarily unavailable: %w", lastErr)
 }
+
 
 func (c *Client) doRequest(body []byte) (string, Usage, error) {
 	httpReq, err := http.NewRequest(http.MethodPost, providerEndpoint, bytes.NewReader(body))

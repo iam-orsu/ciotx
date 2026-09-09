@@ -56,15 +56,19 @@ cd ciotx
 
 # 2. Configure your environment
 cp .env.example .env
-# Edit .env: set DOMAIN_NAME, VPS_SERVER_IP, SSL_EMAIL, LLM_API_KEY
+nano .env   # Set: DOMAIN_NAME, VPS_SERVER_IP, SSL_EMAIL, LLM_API_KEY, MASTER_LICENSE_KEY
 
-# 3. Get SSL certificate (run once)
-chmod +x scripts/init-letsencrypt.sh
-./scripts/init-letsencrypt.sh
-
-# 4. Deploy everything
-docker compose up -d --build
+# 3. Run the deployment script (does everything — Docker, SSL, build, launch)
+chmod +x scripts/deploy.sh
+./scripts/deploy.sh
 ```
+
+That's it. The script handles:
+- Installing Docker if not present
+- Verifying DNS is configured correctly
+- Obtaining a free SSL certificate from Let's Encrypt
+- Building and launching the full Docker stack
+- Running a health check to confirm everything is live
 
 ### Environment Variables (.env)
 

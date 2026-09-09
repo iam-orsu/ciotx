@@ -111,12 +111,21 @@ func (c *Client) Scan(req *ScanRequest) (*ScanResponse, error) {
 	return &scanResp, nil
 }
 
-// VerifyLicense checks if the provided license key is valid.
+// VerifyLicense checks if the provided license key is valid against the ciotx backend.
 func (c *Client) VerifyLicense(key string) error {
-	url := c.endpoint + "/v1/auth/verify"
-	body := []byte(`{"license_key":"` + key + `"}`)
+	type verifyReq struct {
+		LicenseKey string `json:"license_key"`
+	}
+	body, err := json.Marshal(verifyReq{LicenseKey: key})
+	if err != nil {
+		return fmt.Errorf("cannot prepare verification request: %w", err)
+	}
 
-	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	url := c.endpoint + "/v1/auth/verify"
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("cannot create verification request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)

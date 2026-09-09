@@ -18,8 +18,7 @@ server {
 }
 
 server {
-    listen 443 ssl;
-    http2 on;
+    listen 443 ssl http2;
     server_name ${DOMAIN_NAME};
 
     # TLS certificates managed by certbot
@@ -40,8 +39,11 @@ server {
     add_header X-Frame-Options DENY always;
     add_header X-Content-Type-Options nosniff always;
     add_header Referrer-Policy no-referrer always;
-    # Remove server version from headers
+    # Remove server version from response headers
     server_tokens off;
+
+    # DNS resolver for Docker internal network (resolves 'api' container name)
+    resolver 127.0.0.11 valid=10s;
 
     # Strip any headers that might reveal backend technology
     proxy_hide_header X-Powered-By;

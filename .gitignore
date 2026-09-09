@@ -1,6 +1,9 @@
 # ── Build artifacts ──────────────────────────
-ciotx
-ciotx.exe
+# Compiled binaries (root-level only, not inside cli/)
+/ciotx
+/ciotx.exe
+cli/ciotx
+cli/ciotx.exe
 dist/
 *.o
 *.a

@@ -14,10 +14,12 @@ services:
       - "8080"
     networks:
       - ciotx-internal
+    # Healthcheck is defined in the Dockerfile itself (uses wget from alpine)
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
+      start_period: 10s
       retries: 3
 
   # ── Nginx Reverse Proxy (TLS termination, dynamic domain) ─────────
@@ -32,10 +34,10 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      # Let's Encrypt certs (managed by certbot)
+      # Let's Encrypt certs (managed by certbot) — read-only for nginx
       - certbot-certs:/etc/letsencrypt:ro
-      # ACME challenge files
-      - certbot-webroot:/var/www/certbot:ro
+      # ACME challenge files — readable by nginx for HTTP-01 challenge
+      - certbot-webroot:/var/www/certbot
       # install.sh served statically
       - ./scripts/install.sh:/var/www/static/install.sh:ro
     networks:
@@ -44,29 +46,32 @@ services:
       api:
         condition: service_healthy
 
-  # ── Certbot (Let's Encrypt SSL — auto-renewal) ────────────────────
+  # ── Certbot (Let's Encrypt SSL — auto-renewal every 12h) ──────────
   certbot:
     image: certbot/certbot:latest
     restart: unless-stopped
     volumes:
+      # Writable for cert storage and renewal
       - certbot-certs:/etc/letsencrypt
       - certbot-webroot:/var/www/certbot
-    # Renew certs every 12 hours (only acts if expiry < 30 days)
+    # Checks every 12h; only renews if cert expires within 30 days
     entrypoint: >
       sh -c "trap exit TERM;
              while :; do
-               certbot renew --webroot -w /var/www/certbot --quiet;
+               certbot renew --webroot -w /var/www/certbot --quiet 2>&1 | grep -v 'No renewals were attempted';
                sleep 12h & wait $${!};
              done"
 
 # ── Volumes ────────────────────────────────────────────────────────
 volumes:
   certbot-certs:
+    driver: local
   certbot-webroot:
+    driver: local
 
 # ── Networks ───────────────────────────────────────────────────────
-# Internal network: nginx <-> api traffic never leaves Docker
-# Users' Wireshark only sees traffic to/from nginx on ports 80/443
+# Internal bridge: nginx <-> api traffic is never exposed to the host
+# A user running Wireshark on their machine only sees traffic to DOMAIN_NAME:443
 networks:
   ciotx-internal:
     driver: bridge
