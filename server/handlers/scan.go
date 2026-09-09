@@ -1,0 +1,263 @@
+package handlers
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"regexp"
+	"strings"
+	"sync"
+
+	"github.com/iam-orsu/ciotx/server/internal/llm"
+	"github.com/iam-orsu/ciotx/server/internal/types"
+)
+
+// =====================================================================
+// REQUEST / RESPONSE MODELS
+// =====================================================================
+
+type ChunkPayload struct {
+	ChunkID int    `json:"chunk_id"`
+	Payload string `json:"payload"`
+}
+
+type ScanRequest struct {
+	Chunks     []ChunkPayload `json:"chunks"`
+	TotalFiles int            `json:"total_files"`
+	TotalLines int            `json:"total_lines"`
+}
+
+type ScanStats struct {
+	HallucinationsDropped  int     `json:"hallucinations_dropped"`
+	FalsePositivesFiltered int     `json:"false_positives_filtered"`
+	DurationSeconds        float64 `json:"duration_seconds"`
+	EstimatedCostUSD       float64 `json:"estimated_cost_usd"`
+}
+
+type ScanResponse struct {
+	Findings []*types.Finding `json:"findings"`
+	Stats    ScanStats        `json:"stats"`
+}
+
+// =====================================================================
+// SCAN HANDLER
+// =====================================================================
+
+// ScanHandler processes incoming scan requests from the CLI.
+// It runs the full discovery + verification + audit pipeline server-side.
+// Zero LLM branding is returned in the response.
+func ScanHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20)) // 32MB max
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to read request body")
+		return
+	}
+
+	var req ScanRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request format")
+		return
+	}
+
+	if len(req.Chunks) == 0 {
+		writeJSON(w, http.StatusOK, ScanResponse{Findings: []*types.Finding{}, Stats: ScanStats{}})
+		return
+	}
+
+	client := llm.NewClient()
+	usage := &llm.Usage{}
+	var usageMu sync.Mutex
+
+	// ── Phase 1: Discovery pass across all chunks ──────────────────────
+	var candidateFindings []*types.Finding
+	var findingsMu sync.Mutex
+
+	// Sequential processing (reasoner model requires it for rate limits)
+	for _, chunk := range req.Chunks {
+		findings, err := llm.RunDiscovery(client, chunk.ChunkID, chunk.Payload, usage, &usageMu)
+		if err != nil {
+			// Log server-side but don't expose internal error to user
+			fmt.Printf("[server] chunk #%d analysis error: %v\n", chunk.ChunkID, err)
+			continue
+		}
+		findingsMu.Lock()
+		candidateFindings = append(candidateFindings, findings...)
+		findingsMu.Unlock()
+		fmt.Printf("[server] chunk #%d: %d candidate findings\n", chunk.ChunkID, len(findings))
+	}
+
+	// ── Phase 2: Evidence re-anchoring (drop hallucinations) ────────────
+	// Build a simple files map from chunk payloads for evidence verification
+	filesContent := extractFilesContent(req.Chunks)
+	verified, dropped := verifyFindings(candidateFindings, filesContent)
+	fmt.Printf("[server] verified: %d findings (%d hallucinations dropped)\n", len(verified), dropped)
+
+	// ── Phase 3: Adversarial audit (eliminate false positives) ─────────
+	final, rejected, _ := llm.RunAudit(client, verified, filesContent, usage, &usageMu)
+	fmt.Printf("[server] final: %d findings (%d false positives filtered)\n", len(final), rejected)
+
+	if final == nil {
+		final = []*types.Finding{}
+	}
+
+	resp := ScanResponse{
+		Findings: final,
+		Stats: ScanStats{
+			HallucinationsDropped:  dropped,
+			FalsePositivesFiltered: rejected,
+		},
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// =====================================================================
+// EVIDENCE VERIFICATION (server-side re-anchoring)
+// =====================================================================
+
+func verifyFindings(findings []*types.Finding, filesContent map[string][]string) ([]*types.Finding, int) {
+	dropped := 0
+	seen := map[string]bool{}
+	var verified []*types.Finding
+
+	for _, f := range findings {
+		lines, ok := filesContent[f.File]
+		if !ok {
+			dropped++
+			continue
+		}
+
+		evidenceText := strings.TrimSpace(f.Evidence)
+		if evidenceText == "" {
+			dropped++
+			continue
+		}
+
+		evLines := strings.Split(evidenceText, "\n")
+		firstEv := strings.TrimSpace(evLines[0])
+		if firstEv == "" {
+			dropped++
+			continue
+		}
+
+		matchedStart := -1
+		matchedEnd := -1
+
+		// Check candidate line first
+		if candIdx := f.LineStart - 1; candIdx >= 0 && candIdx < len(lines) {
+			if strings.Contains(lines[candIdx], firstEv) {
+				matchedStart = f.LineStart
+				matchedEnd = f.LineStart + len(evLines) - 1
+			}
+		}
+
+		// Search ±15 lines
+		if matchedStart == -1 {
+			start := max(0, f.LineStart-16)
+			end := min(len(lines), f.LineStart+15)
+			for idx := start; idx < end; idx++ {
+				if strings.Contains(lines[idx], firstEv) {
+					matchedStart = idx + 1
+					matchedEnd = idx + len(evLines)
+					break
+				}
+			}
+		}
+
+		// Full file search for non-trivial evidence
+		if matchedStart == -1 && len(firstEv) >= 5 {
+			for idx, line := range lines {
+				if strings.Contains(line, firstEv) {
+					matchedStart = idx + 1
+					matchedEnd = idx + len(evLines)
+					break
+				}
+			}
+		}
+
+		if matchedStart == -1 {
+			dropped++
+			continue
+		}
+
+		f.LineStart = matchedStart
+		f.LineEnd = matchedEnd
+		if f.LineEnd < f.LineStart {
+			f.LineEnd = f.LineStart
+		}
+
+		key := fmt.Sprintf("%s|%s|%d", f.File, f.CWE, f.LineStart)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		verified = append(verified, f)
+	}
+
+	return verified, dropped
+}
+
+// extractFilesContent parses file content from chunk payloads for evidence verification.
+// Chunks are formatted as "===== FILE: path (N lines) =====\n0001 | line\n..."
+func extractFilesContent(chunks []ChunkPayload) map[string][]string {
+	result := map[string][]string{}
+
+	fileHeaderRe := regexp.MustCompile(`===== FILE: (.+?) \(\d+ lines\) =====`)
+	lineRe := regexp.MustCompile(`^\d{4} \| (.*)$`)
+
+	for _, chunk := range chunks {
+		currentFile := ""
+		for _, line := range strings.Split(chunk.Payload, "\n") {
+			if m := fileHeaderRe.FindStringSubmatch(line); len(m) > 1 {
+				currentFile = strings.TrimSpace(m[1])
+				if _, exists := result[currentFile]; !exists {
+					result[currentFile] = []string{}
+				}
+				continue
+			}
+			if currentFile != "" {
+				if m := lineRe.FindStringSubmatch(line); len(m) > 1 {
+					result[currentFile] = append(result[currentFile], m[1])
+				}
+			}
+		}
+	}
+
+	return result
+}
+
+// =====================================================================
+// HELPERS
+// =====================================================================
+
+func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

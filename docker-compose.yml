@@ -1,0 +1,72 @@
+services:
+
+  # ── ciotx API Server ───────────────────────────────────────────────
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - PORT=8080
+      - LLM_API_KEY=${LLM_API_KEY}
+      - MASTER_LICENSE_KEY=${MASTER_LICENSE_KEY}
+    expose:
+      - "8080"
+    networks:
+      - ciotx-internal
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Nginx Reverse Proxy (TLS termination, dynamic domain) ─────────
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - DOMAIN_NAME=${DOMAIN_NAME}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Let's Encrypt certs (managed by certbot)
+      - certbot-certs:/etc/letsencrypt:ro
+      # ACME challenge files
+      - certbot-webroot:/var/www/certbot:ro
+      # install.sh served statically
+      - ./scripts/install.sh:/var/www/static/install.sh:ro
+    networks:
+      - ciotx-internal
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # ── Certbot (Let's Encrypt SSL — auto-renewal) ────────────────────
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    volumes:
+      - certbot-certs:/etc/letsencrypt
+      - certbot-webroot:/var/www/certbot
+    # Renew certs every 12 hours (only acts if expiry < 30 days)
+    entrypoint: >
+      sh -c "trap exit TERM;
+             while :; do
+               certbot renew --webroot -w /var/www/certbot --quiet;
+               sleep 12h & wait $${!};
+             done"
+
+# ── Volumes ────────────────────────────────────────────────────────
+volumes:
+  certbot-certs:
+  certbot-webroot:
+
+# ── Networks ───────────────────────────────────────────────────────
+# Internal network: nginx <-> api traffic never leaves Docker
+# Users' Wireshark only sees traffic to/from nginx on ports 80/443
+networks:
+  ciotx-internal:
+    driver: bridge
