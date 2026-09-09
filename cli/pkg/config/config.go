@@ -1,5 +1,7 @@
 // Package config manages the ciotx CLI configuration stored in ~/.ciotx/config.json.
-// It holds the user's license key (the only credential the user ever interacts with).
+// It holds ONLY the user's license key — the one credential the user interacts with.
+// The API endpoint is compiled in via ldflags and is NOT user-configurable.
+// This is intentional: users must not be able to redirect traffic to a third-party server.
 package config
 
 import (
@@ -10,13 +12,15 @@ import (
 	"path/filepath"
 )
 
-const configDir = ".ciotx"
-const configFile = "config.json"
+const (
+	configDir  = ".ciotx"
+	configFile = "config.json"
+)
 
 // Config holds persistent CLI settings.
+// Deliberately minimal — only what the user legitimately needs to store.
 type Config struct {
 	LicenseKey string `json:"license_key"`
-	APIEndpoint string `json:"api_endpoint"` // Injected at build time via ldflags
 }
 
 // configPath returns the absolute path to ~/.ciotx/config.json
@@ -28,7 +32,7 @@ func configPath() (string, error) {
 	return filepath.Join(home, configDir, configFile), nil
 }
 
-// Load reads the config from disk. Returns empty Config if not found.
+// Load reads the config from disk. Returns an empty Config if not yet authenticated.
 func Load() (*Config, error) {
 	path, err := configPath()
 	if err != nil {
@@ -50,13 +54,14 @@ func Load() (*Config, error) {
 	return &cfg, nil
 }
 
-// Save writes the config to disk at ~/.ciotx/config.json
+// Save writes the config to disk at ~/.ciotx/config.json with restrictive permissions.
 func Save(cfg *Config) error {
 	path, err := configPath()
 	if err != nil {
 		return err
 	}
 
+	// 0700 on dir: only owner can list it. 0600 on file: only owner can read/write.
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}

@@ -1,0 +1,9 @@
+# Normalize line endings on all platforms (eliminates CRLF warnings permanently)
+* text=auto eol=lf
+
+# Force binary treatment for actual binaries
+*.exe binary
+*.dll binary
+*.so  binary
+*.tar.gz binary
+*.zip binary

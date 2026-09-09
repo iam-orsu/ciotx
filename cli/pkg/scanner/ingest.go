@@ -2,9 +2,7 @@
 // This runs entirely on the user's machine — no files are sent without chunking.
 package scanner
 
-
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -174,25 +172,6 @@ func PartitionChunks(files []*SourceFile, targetTokens int) []*CodeChunk {
 	flush()
 
 	return chunks
-}
-
-// ParseGitignore reads .gitignore patterns from the root directory.
-func ParseGitignore(rootDir string) []string {
-	var patterns []string
-	giPath := filepath.Join(rootDir, ".gitignore")
-	f, err := os.Open(giPath)
-	if err != nil {
-		return patterns
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line != "" && !strings.HasPrefix(line, "#") {
-			patterns = append(patterns, line)
-		}
-	}
-	return patterns
 }
 
 func max(a, b int) int {

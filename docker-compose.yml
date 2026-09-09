@@ -14,13 +14,24 @@ services:
       - "8080"
     networks:
       - ciotx-internal
-    # Healthcheck is defined in the Dockerfile itself (uses wget from alpine)
+    # Allow in-flight scans to complete during graceful shutdown
+    stop_grace_period: 90s
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
-      start_period: 10s
+      start_period: 15s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          # A single scan can be CPU intensive (JSON parsing, string matching)
+          # but should never consume more than 2 cores or 1GB RAM.
+          cpus: "2.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 128M
 
   # ── Nginx Reverse Proxy (TLS termination, dynamic domain) ─────────
   nginx:
@@ -34,33 +45,43 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      # Let's Encrypt certs (managed by certbot) — read-only for nginx
+      # Let's Encrypt certs — read-only for nginx
       - certbot-certs:/etc/letsencrypt:ro
-      # ACME challenge files — readable by nginx for HTTP-01 challenge
+      # ACME challenge webroot
       - certbot-webroot:/var/www/certbot
       # install.sh served statically
-      - ./scripts/install.sh:/var/www/static/install.sh:ro
+      - ./scripts/deploy.sh:/var/www/static/install.sh:ro
     networks:
       - ciotx-internal
+    stop_grace_period: 30s
     depends_on:
       api:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
 
   # ── Certbot (Let's Encrypt SSL — auto-renewal every 12h) ──────────
   certbot:
     image: certbot/certbot:latest
     restart: unless-stopped
     volumes:
-      # Writable for cert storage and renewal
       - certbot-certs:/etc/letsencrypt
       - certbot-webroot:/var/www/certbot
-    # Checks every 12h; only renews if cert expires within 30 days
+    # Checks every 12h; certbot only renews if expiry < 30 days
     entrypoint: >
       sh -c "trap exit TERM;
              while :; do
-               certbot renew --webroot -w /var/www/certbot --quiet 2>&1 | grep -v 'No renewals were attempted';
+               certbot renew --webroot -w /var/www/certbot --quiet;
                sleep 12h & wait $${!};
              done"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
 
 # ── Volumes ────────────────────────────────────────────────────────
 volumes:
@@ -70,8 +91,9 @@ volumes:
     driver: local
 
 # ── Networks ───────────────────────────────────────────────────────
-# Internal bridge: nginx <-> api traffic is never exposed to the host
-# A user running Wireshark on their machine only sees traffic to DOMAIN_NAME:443
+# Internal bridge: api ↔ nginx traffic is isolated from the host network.
+# A user running Wireshark only ever sees TLS traffic to DOMAIN_NAME:443.
+# The api container has no public port — completely invisible.
 networks:
   ciotx-internal:
     driver: bridge

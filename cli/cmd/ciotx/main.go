@@ -21,12 +21,14 @@ import (
 	"github.com/iam-orsu/ciotx/cli/pkg/scanner"
 )
 
-// APIEndpoint is injected at build time via:
-// go build -ldflags "-X main.APIEndpoint=https://api.ciotx.ai" ./cmd/ciotx
-// This means the user's binary always points to YOUR server — never to any third party.
-var APIEndpoint = "https://api.ciotx.ai"
-
-const version = "1.0.0"
+// Build metadata — injected via: go build -ldflags "-X main.Version=x.y.z -X main.Commit=abc -X main.BuildDate=..."
+// Falls back to safe defaults when built without ldflags (e.g., go run).
+var (
+	APIEndpoint = "https://api.ciotx.ai" // overridden by Makefile
+	Version     = "dev"
+	Commit      = "unknown"
+	BuildDate   = "unknown"
+)
 
 func main() {
 	args := os.Args[1:]
@@ -52,7 +54,7 @@ func main() {
 		os.Exit(cmdScan(target))
 
 	case "version", "--version", "-v":
-		fmt.Printf("ciotx v%s\n", version)
+		fmt.Printf("ciotx %s (commit %s, built %s)\n", Version, Commit, BuildDate)
 		os.Exit(0)
 
 	case "help", "--help", "-h":
@@ -93,7 +95,7 @@ func cmdAuthLogin() int {
 
 	fmt.Println("\n  Verifying license key...")
 
-	cfg := &config.Config{LicenseKey: key, APIEndpoint: APIEndpoint}
+	cfg := &config.Config{LicenseKey: key}
 	client := api.NewClient(APIEndpoint, key)
 	if err := client.VerifyLicense(key); err != nil {
 		fmt.Fprintf(os.Stderr, "\n[!] %v\n", err)
@@ -126,10 +128,9 @@ func cmdScan(target string) int {
 		return 1
 	}
 
+	// Always use the compiled-in endpoint — never read from disk config.
+	// This prevents a compromised config file from redirecting scans.
 	endpoint := APIEndpoint
-	if cfg.APIEndpoint != "" {
-		endpoint = cfg.APIEndpoint
-	}
 
 	// ── Print header ──────────────────────────────────────────────────
 	targetDir, _ := filepath.Abs(target)
@@ -245,7 +246,7 @@ func printHelp() {
     ciotx auth login          Authenticate with your license key
     ciotx scan .              Scan the current directory
     ciotx scan /path/to/repo  Scan a specific directory
-    ciotx version             Print version
+    ciotx version             Print version and build info
 
   Get your license key at https://ciotx.ai`)
 }
