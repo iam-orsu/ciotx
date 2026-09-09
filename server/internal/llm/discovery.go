@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -51,7 +52,7 @@ RESPONSE FORMAT — strictly valid JSON only:
 If no genuine exploitable vulnerabilities exist, return: {"findings": []}`
 
 // RunDiscovery sends one code chunk to the internal LLM for vulnerability discovery.
-func RunDiscovery(client *Client, chunkID int, payload string, usage *Usage, usageMu interface{ Lock(); Unlock() }) ([]*types.Finding, error) {
+func RunDiscovery(ctx context.Context, client *Client, chunkID int, payload string, usage *Usage, usageMu interface{ Lock(); Unlock() }) ([]*types.Finding, error) {
 	userPrompt := fmt.Sprintf(`Conduct a thorough vulnerability review for code chunk #%d.
 Read line by line, trace data flows from sources to sinks, and identify all genuine security vulnerabilities.
 
@@ -61,7 +62,7 @@ Return strictly valid JSON with {"findings": [...]}. The 'evidence' field must b
 		chunkID, payload)
 
 	msgs := NewMessages(discoverySystemPrompt, userPrompt)
-	content, u, err := client.Chat(modelDiscovery, msgs, false, 8192)
+	content, u, err := client.Chat(ctx, modelDiscovery, msgs, false, 8192)
 	if err != nil {
 		return nil, err
 	}

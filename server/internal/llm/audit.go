@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -34,7 +35,7 @@ RESPONSE FORMAT — strictly valid JSON:
 }`
 
 // RunAudit sends verified findings to a skeptical internal model to filter false positives.
-func RunAudit(client *Client, findings []*types.Finding, filesContent map[string][]string, usage *Usage, usageMu interface{ Lock(); Unlock() }) ([]*types.Finding, int, error) {
+func RunAudit(ctx context.Context, client *Client, findings []*types.Finding, filesContent map[string][]string, usage *Usage, usageMu interface{ Lock(); Unlock() }) ([]*types.Finding, int, error) {
 	if len(findings) == 0 {
 		return findings, 0, nil
 	}
@@ -88,7 +89,7 @@ CANDIDATE FINDINGS:
 Return strictly valid JSON with {"verdicts": [...]}`, len(items), string(itemsJSON))
 
 	msgs := NewMessages(auditSystemPrompt, userPrompt)
-	content, u, err := client.Chat(modelAudit, msgs, true, 8192)
+	content, u, err := client.Chat(ctx, modelAudit, msgs, true, 8192)
 	if err != nil {
 		// Non-fatal: return all verified findings if audit fails
 		return findings, 0, nil

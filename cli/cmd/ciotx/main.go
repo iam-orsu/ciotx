@@ -98,7 +98,7 @@ func cmdAuthLogin() int {
 	fmt.Println("\n  Verifying license key...")
 
 	cfg := &config.Config{LicenseKey: key}
-	client := api.NewClient(APIEndpoint, key)
+	client := api.NewClient(APIEndpoint, key, Version)
 	if err := client.VerifyLicense(key); err != nil {
 		fmt.Fprintf(os.Stderr, "\n[!] %v\n", err)
 		return 1
@@ -129,10 +129,6 @@ func cmdScan(target string) int {
 		fmt.Println("[!] Not authenticated. Run 'ciotx auth login' first.")
 		return 1
 	}
-
-	// Always use the compiled-in endpoint — never read from disk config.
-	// This prevents a compromised config file from redirecting scans.
-	endpoint := APIEndpoint
 
 	// ── Print header ──────────────────────────────────────────────────
 	targetDir, _ := filepath.Abs(target)
@@ -174,7 +170,7 @@ func cmdScan(target string) int {
 		})
 	}
 
-	client := api.NewClient(endpoint, cfg.LicenseKey)
+	client := api.NewClient(APIEndpoint, cfg.LicenseKey, Version)
 	scanResp, err := client.Scan(&api.ScanRequest{
 		Chunks:     apiChunks,
 		TotalFiles: len(files),

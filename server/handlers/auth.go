@@ -56,7 +56,7 @@ func isValidKey(key string) bool {
 	}
 	// Constant-time comparison prevents timing side-channel attacks
 	return subtle.ConstantTimeCompare([]byte(key), []byte(master)) == 1
-	// TODO Phase 2: validate against PostgreSQL license keys table
+	// TODO Phase 2: validate against database with plan enforcement
 }
 
 // AuthMiddleware validates the Bearer token on protected routes.

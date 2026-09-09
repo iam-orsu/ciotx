@@ -72,8 +72,9 @@ func ScanHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Context with timeout — prevent a single scan from hanging the server indefinitely
-	_, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
+	// Context with timeout — propagated to all LLM calls so a hung scan
+	// cannot block the server goroutine pool indefinitely.
+	scanCtx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
 	defer cancel()
 
 	startTime := time.Now()
@@ -84,7 +85,7 @@ func ScanHandler(w http.ResponseWriter, r *http.Request) {
 	// ── Phase 1: Discovery pass — sequential (required by rate limits)
 	var candidateFindings []*types.Finding
 	for _, chunk := range req.Chunks {
-		findings, err := llm.RunDiscovery(client, chunk.ChunkID, chunk.Payload, usage, &usageMu)
+		findings, err := llm.RunDiscovery(scanCtx, client, chunk.ChunkID, chunk.Payload, usage, &usageMu)
 		if err != nil {
 			// Log server-side only — never expose internal errors to users
 			fmt.Printf("[server] chunk #%d error: %v\n", chunk.ChunkID, err)
@@ -100,7 +101,7 @@ func ScanHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("[server] verified: %d (%d hallucinations dropped)\n", len(verified), dropped)
 
 	// ── Phase 3: Adversarial audit — filter false positives
-	final, rejected, _ := llm.RunAudit(client, verified, filesContent, usage, &usageMu)
+	final, rejected, _ := llm.RunAudit(scanCtx, client, verified, filesContent, usage, &usageMu)
 	fmt.Printf("[server] final: %d (%d false positives filtered)\n", len(final), rejected)
 
 	if final == nil {

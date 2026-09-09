@@ -46,16 +46,18 @@ type ScanStats struct {
 type Client struct {
 	endpoint   string
 	licenseKey string
+	version    string
 	http       *http.Client
 }
 
 // NewClient creates a new backend API client.
-func NewClient(endpoint, licenseKey string) *Client {
+func NewClient(endpoint, licenseKey, version string) *Client {
 	return &Client{
 		endpoint:   endpoint,
 		licenseKey: licenseKey,
+		version:    version,
 		http: &http.Client{
-			Timeout: 600 * time.Second, // Long timeout for full scans
+			Timeout: 35 * time.Minute, // Matches server WriteTimeout exactly
 		},
 	}
 }
@@ -77,7 +79,8 @@ func (c *Client) Scan(req *ScanRequest) (*ScanResponse, error) {
 	// No LLM provider names, no model names, no third-party references.
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.licenseKey)
-	httpReq.Header.Set("User-Agent", "ciotx-cli/1.0")
+	// User-Agent is the only signal exposed — version comes from ldflags at build time
+	httpReq.Header.Set("User-Agent", "ciotx/"+c.version)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
@@ -94,7 +97,7 @@ func (c *Client) Scan(req *ScanRequest) (*ScanResponse, error) {
 		return nil, fmt.Errorf("authentication failed — run 'ciotx auth login' to re-authenticate")
 	}
 	if resp.StatusCode == http.StatusPaymentRequired {
-		return nil, fmt.Errorf("scan limit reached — upgrade your plan at https://ciotx.ai/pricing")
+		return nil, fmt.Errorf("scan limit reached — upgrade your plan")
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("backend error (HTTP %d): %s", resp.StatusCode, string(respBody))

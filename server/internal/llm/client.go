@@ -4,6 +4,7 @@ package llm
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -85,7 +86,8 @@ func AuditModel() string { return modelAudit }
 
 // Chat sends a request to the internal LLM provider with retry and exponential backoff.
 // All provider-specific metadata is stripped from the returned content string.
-func (c *Client) Chat(model string, messages []message, jsonMode bool, maxTokens int) (string, Usage, error) {
+// The context is propagated so the HTTP request is cancelled on timeout or client disconnect.
+func (c *Client) Chat(ctx context.Context, model string, messages []message, jsonMode bool, maxTokens int) (string, Usage, error) {
 	req := chatRequest{
 		Model:       model,
 		Messages:    messages,
@@ -105,24 +107,32 @@ func (c *Client) Chat(model string, messages []message, jsonMode bool, maxTokens
 	maxRetries := 5
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		content, usage, err := c.doRequest(body)
+		content, usage, err := c.doRequest(ctx, body)
 		if err == nil {
 			return content, usage, nil
 		}
 		lastErr = err
 
+		// If context was cancelled (timeout/disconnect), stop retrying immediately
+		if ctx.Err() != nil {
+			return "", Usage{}, ctx.Err()
+		}
+
 		// Exponential backoff: 5s, 10s, 20s, 40s
 		if attempt < maxRetries-1 {
 			wait := time.Duration(5*(1<<attempt)) * time.Second
-			time.Sleep(wait)
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return "", Usage{}, ctx.Err()
+			}
 		}
 	}
 	return "", Usage{}, fmt.Errorf("analysis service temporarily unavailable: %w", lastErr)
 }
 
-
-func (c *Client) doRequest(body []byte) (string, Usage, error) {
-	httpReq, err := http.NewRequest(http.MethodPost, providerEndpoint, bytes.NewReader(body))
+func (c *Client) doRequest(ctx context.Context, body []byte) (string, Usage, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, providerEndpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", Usage{}, err
 	}
