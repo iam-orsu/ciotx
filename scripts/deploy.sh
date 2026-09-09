@@ -298,7 +298,7 @@ success "Binaries copied to ${RELEASES_DIR}/ for download"
 # =======================================================================
 # STEP 5: Build Docker Images + Launch
 # =======================================================================
-header "Step 4 — Building & Deploying"
+header "Step 5 — Building & Deploying"
 
 info "Building Docker images (this takes a few minutes on first run)..."
 docker compose build --no-cache

@@ -5,6 +5,8 @@ package db
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -51,6 +53,10 @@ func Pool() *pgxpool.Pool {
 	return pool
 }
 
+// IsAvailable reports whether the DB pool was successfully initialized.
+// Use this before calling Pool() in contexts where DB unavailability is non-fatal.
+func IsAvailable() bool { return pool != nil }
+
 // Close drains the pool. Call during graceful shutdown.
 func Close() {
 	if pool != nil {
@@ -59,9 +65,10 @@ func Close() {
 }
 
 // buildDSN constructs a DSN from DATABASE_URL (preferred) or individual POSTGRES_* vars.
+// Uses url.URL to safely encode the password — avoids DSN injection from special chars.
 func buildDSN() string {
-	if url := os.Getenv("DATABASE_URL"); url != "" {
-		return url
+	if v := os.Getenv("DATABASE_URL"); v != "" {
+		return v
 	}
 
 	host := getenv("POSTGRES_HOST", "postgres")
@@ -73,10 +80,15 @@ func buildDSN() string {
 	if password == "" {
 		return ""
 	}
-	return fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
-		host, port, user, password, dbname,
-	)
+
+	u := &url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(user, password),
+		Host:     net.JoinHostPort(host, port),
+		Path:     "/" + dbname,
+		RawQuery: "sslmode=disable",
+	}
+	return u.String()
 }
 
 func getenv(key, fallback string) string {

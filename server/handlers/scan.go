@@ -251,13 +251,16 @@ func verifyFindings(findings []*types.Finding, filesContent map[string][]string)
 	return verified, dropped
 }
 
+// Package-level regexes compiled once at startup.
+var (
+	fileHeaderRe = regexp.MustCompile(`===== FILE: (.+?) \(\d+ lines\) =====`)
+	lineRe       = regexp.MustCompile(`^\d{4} \| (.*)$`)
+)
+
 // extractFilesContent parses file content from chunk payloads for evidence verification.
 // Chunks are formatted as "===== FILE: path (N lines) =====\n0001 | line\n..."
 func extractFilesContent(chunks []ChunkPayload) map[string][]string {
 	result := map[string][]string{}
-
-	fileHeaderRe := regexp.MustCompile(`===== FILE: (.+?) \(\d+ lines\) =====`)
-	lineRe := regexp.MustCompile(`^\d{4} \| (.*)$`)
 
 	for _, chunk := range chunks {
 		currentFile := ""

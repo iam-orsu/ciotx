@@ -44,7 +44,12 @@ func (l *License) IsExpired() bool {
 }
 
 // GetLicenseByKey fetches a license by its key. Returns pgx.ErrNoRows if not found.
+// Returns pgx.ErrNoRows (not a panic) when the DB pool is not initialized,
+// so callers can fall through to a master-key fallback safely.
 func GetLicenseByKey(ctx context.Context, key string) (*License, error) {
+	if !IsAvailable() {
+		return nil, pgx.ErrNoRows
+	}
 	row := Pool().QueryRow(ctx, `
 		SELECT id, license_key, organization, email, plan,
 		       max_scans_per_month, scans_this_month, scan_month,
@@ -67,6 +72,9 @@ func GetLicenseByKey(ctx context.Context, key string) (*License, error) {
 // IncrementScanCount atomically increments (or resets then increments) the scan counter.
 // The reset-on-new-month logic is done entirely in SQL to avoid race conditions.
 func IncrementScanCount(ctx context.Context, licenseID string) error {
+	if !IsAvailable() {
+		return fmt.Errorf("database unavailable")
+	}
 	currentMonth := time.Now().UTC().Format("2006-01")
 	_, err := Pool().Exec(ctx, `
 		UPDATE licenses SET
@@ -83,6 +91,9 @@ func IncrementScanCount(ctx context.Context, licenseID string) error {
 
 // RecordScan writes a row to scan_history after a completed scan.
 func RecordScan(ctx context.Context, licenseID, clientVersion string, findingsCount, criticalCount, highCount int, durationMS int64) error {
+	if !IsAvailable() {
+		return fmt.Errorf("database unavailable")
+	}
 	_, err := Pool().Exec(ctx, `
 		INSERT INTO scan_history
 			(license_id, findings_count, critical_count, high_count, duration_ms, client_version)
@@ -93,6 +104,9 @@ func RecordScan(ctx context.Context, licenseID, clientVersion string, findingsCo
 
 // CreateLicense generates a new license key and inserts it into the database.
 func CreateLicense(ctx context.Context, org, email, plan string, maxScans int, expiresAt *time.Time) (string, error) {
+	if !IsAvailable() {
+		return "", fmt.Errorf("database unavailable")
+	}
 	key := "ciotx_" + randomHex(24) // 48-char random suffix → 55-char total key
 	_, err := Pool().Exec(ctx, `
 		INSERT INTO licenses (license_key, organization, email, plan, max_scans_per_month, expires_at)
@@ -106,6 +120,9 @@ func CreateLicense(ctx context.Context, org, email, plan string, maxScans int, e
 
 // RevokeLicense deactivates a key without deleting its history.
 func RevokeLicense(ctx context.Context, key string) error {
+	if !IsAvailable() {
+		return fmt.Errorf("database unavailable")
+	}
 	tag, err := Pool().Exec(ctx, `
 		UPDATE licenses SET is_active = FALSE, updated_at = NOW()
 		WHERE license_key = $1
@@ -121,6 +138,9 @@ func RevokeLicense(ctx context.Context, key string) error {
 
 // ListLicenses returns all licenses ordered newest first.
 func ListLicenses(ctx context.Context) ([]*License, error) {
+	if !IsAvailable() {
+		return nil, fmt.Errorf("database unavailable")
+	}
 	rows, err := Pool().Query(ctx, `
 		SELECT id, license_key, organization, email, plan,
 		       max_scans_per_month, scans_this_month, scan_month,

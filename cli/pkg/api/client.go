@@ -88,7 +88,7 @@ func (c *Client) Scan(req *ScanRequest) (*ScanResponse, error) {
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 5<<20)) // 5 MB cap
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}

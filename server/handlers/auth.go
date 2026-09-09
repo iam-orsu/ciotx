@@ -88,6 +88,9 @@ func resolveKey(ctx context.Context, key string) (*db.License, error) {
 	if key == "" {
 		return nil, fmt.Errorf("empty key")
 	}
+	if len(key) > 128 {
+		return nil, fmt.Errorf("key too long")
+	}
 
 	// ── 1. Database lookup ────────────────────────────────────────────
 	license, dbErr := db.GetLicenseByKey(ctx, key)

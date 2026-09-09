@@ -174,7 +174,7 @@ func (c *Client) doRequest(ctx context.Context, body []byte) (string, Usage, err
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10 MB cap
 	if err != nil {
 		return "", Usage{}, err
 	}

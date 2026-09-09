@@ -11,11 +11,18 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/iam-orsu/ciotx/server/internal/db"
 )
+
+var validPlans = map[string]bool{
+	"starter":    true,
+	"pro":        true,
+	"enterprise": true,
+}
 
 // RunLicenseCLI dispatches `ciotx-server license <subcommand>`.
 func RunLicenseCLI(args []string) {
@@ -63,6 +70,14 @@ func runCreate(ctx context.Context, args []string) {
 	if *org == "" || *email == "" {
 		fmt.Fprintln(os.Stderr, "[!] --org and --email are required")
 		fs.Usage()
+		os.Exit(1)
+	}
+	if !strings.Contains(*email, "@") {
+		fmt.Fprintf(os.Stderr, "[!] invalid email address: %s\n", *email)
+		os.Exit(1)
+	}
+	if !validPlans[*plan] {
+		fmt.Fprintf(os.Stderr, "[!] invalid plan %q — must be one of: starter, pro, enterprise\n", *plan)
 		os.Exit(1)
 	}
 

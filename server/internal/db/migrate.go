@@ -58,13 +58,23 @@ func RunMigrations(ctx context.Context) error {
 			return fmt.Errorf("read migration %s: %w", version, err)
 		}
 
-		if _, err := pool.Exec(ctx, string(sql)); err != nil {
+		// Wrap each migration + its tracking record in a single transaction.
+		// If the server crashes between the two, the migration retries cleanly on restart.
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin transaction for migration %s: %w", version, err)
+		}
+		if _, err := tx.Exec(ctx, string(sql)); err != nil {
+			_ = tx.Rollback(ctx)
 			return fmt.Errorf("apply migration %s: %w", version, err)
 		}
-
-		if _, err := pool.Exec(ctx,
+		if _, err := tx.Exec(ctx,
 			"INSERT INTO schema_migrations (version) VALUES ($1)", version); err != nil {
+			_ = tx.Rollback(ctx)
 			return fmt.Errorf("record migration %s: %w", version, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit migration %s: %w", version, err)
 		}
 
 		fmt.Printf("[db] migration applied: %s\n", version)

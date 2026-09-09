@@ -265,6 +265,58 @@ docker compose exec api /ciotx-server license list
 
 ---
 
+## 5.5. Post-Phase-2 Deep QA Audit (v2.0.1) — COMPLETED
+
+A comprehensive security and correctness audit was performed across all files in both modules and the infrastructure layer. All issues were fixed in a single pass.
+
+### Issues Fixed
+
+#### A. CRITICAL — DB Pool Nil Panic Breaks Master Key Fallback (`server/internal/db/`)
+- **Problem**: `main.go` allows DB init to fail non-fatally so the master key still works when Postgres is unreachable. But `license.go` called `Pool()` directly, which panics on nil. The panic was caught by `RecoveryMiddleware` returning HTTP 500 — the master key fallback in `resolveKey` was **never reached**. Master key was effectively broken when DB was down.
+- **Fix**: Added `IsAvailable() bool { return pool != nil }` to `db.go`. Every function in `license.go` now guards with `if !IsAvailable() { return ..., fmt.Errorf("database unavailable") }` before calling `Pool()`. `GetLicenseByKey` specifically returns `pgx.ErrNoRows` when DB is unavailable, causing `resolveKey` to naturally fall through to the master key check.
+
+#### B. CRITICAL — DSN Password Injection via Special Characters (`server/internal/db/db.go`)
+- **Problem**: `buildDSN()` used `fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable", ...)`. A `POSTGRES_PASSWORD` containing spaces, `=`, or `'` would corrupt the DSN string, cause pgx to fail parsing, and potentially leak the password in error logs.
+- **Fix**: Replaced `fmt.Sprintf` with `url.URL{Scheme: "postgres", User: url.UserPassword(user, password), Host: net.JoinHostPort(host, port), ...}` — Go's `net/url` package handles all special-character escaping correctly.
+
+#### C. CRITICAL — LLM Response Body Unbounded (`server/internal/llm/client.go`)
+- **Problem**: `io.ReadAll(resp.Body)` in `doRequest` had no size limit. A malicious or misbehaving LLM provider could send gigabytes, exhausting server memory.
+- **Fix**: Capped to `io.LimitReader(resp.Body, 10<<20)` (10 MB). LLM responses are JSON and never legitimately exceed a few hundred KB.
+
+#### D. CRITICAL — Migration Not in Transaction (`server/internal/db/migrate.go`)
+- **Problem**: Each migration applied its SQL and then wrote to `schema_migrations` as two separate `pool.Exec` calls. A crash between the two would leave the DB in an inconsistent state: migration applied but not recorded → startup would re-apply it and fail with "already exists".
+- **Fix**: Wrapped both `Exec` calls (migration SQL + `schema_migrations` INSERT) in a single `pool.Begin` / `tx.Commit` transaction. Rollback on any error ensures atomicity.
+
+#### E. Regex Compiled Per-Request (`server/handlers/scan.go`)
+- **Problem**: `extractFilesContent` called `regexp.MustCompile` twice on every HTTP scan request — unnecessary CPU overhead and GC pressure.
+- **Fix**: Moved both regexes to package-level `var` declarations compiled once at process start.
+
+#### F. SECURITY — No Plan Validation in Admin CLI (`server/admin/license.go`)
+- **Problem**: `--plan` accepted any string, allowing arbitrary values like `"free"`, `"god"`, or `""` to be stored in the DB.
+- **Fix**: Added `validPlans` map (`starter|pro|enterprise`) and validation before calling `db.CreateLicense`.
+
+#### G. SECURITY — No Email Validation in Admin CLI (`server/admin/license.go`)
+- **Problem**: `--email` accepted any string including empty (covered by nil check but not format).
+- **Fix**: Basic `strings.Contains(*email, "@")` check with clear error message.
+
+#### H. SECURITY — License Key Length Not Validated Before DB Query (`server/handlers/auth.go`)
+- **Problem**: `resolveKey` sent arbitrarily long strings to the DB without a length cap — potential for oversized queries.
+- **Fix**: Added `if len(key) > 128 { return nil, fmt.Errorf("key too long") }` check before any DB or comparison operation.
+
+#### I. SECURITY — CLI Scan Response Body Unbounded (`cli/pkg/api/client.go`)
+- **Problem**: `io.ReadAll(resp.Body)` in `Scan()` had no size limit — a malicious or misbehaving server could send a very large payload causing the CLI to OOM.
+- **Fix**: Capped to `io.LimitReader(resp.Body, 5<<20)` (5 MB). Scan responses are JSON findings and never legitimately exceed a few hundred KB.
+
+#### J. deploy.sh Step Header Typo
+- **Problem**: Step 5 (build & deploy) was labeled "Step 4" (duplicate of the CLI build step header above it).
+- **Fix**: Changed to "Step 5 — Building & Deploying".
+
+### Verification
+- `go build ./...` passes cleanly for both `server/` and `cli/` modules after all changes.
+- All existing tests still pass.
+
+---
+
 ## 6. Phase 3 & Beyond: Future Architecture
 
 ### Phase 3: Usage Metering, Quotas & Alerting
