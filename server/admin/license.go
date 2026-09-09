@@ -18,6 +18,14 @@ import (
 	"github.com/iam-orsu/ciotx/server/internal/db"
 )
 
+func formatDuration(ms int64) string {
+	d := time.Duration(ms) * time.Millisecond
+	if d < time.Minute {
+		return fmt.Sprintf("%.0fs", d.Seconds())
+	}
+	return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
+}
+
 var validPlans = map[string]bool{
 	"starter":    true,
 	"pro":        true,
@@ -47,6 +55,8 @@ func RunLicenseCLI(args []string) {
 		runRevoke(ctx, args[1:])
 	case "list":
 		runList(ctx)
+	case "stats":
+		runStats(ctx, args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n\n", args[0])
 		printLicenseHelp()
@@ -177,6 +187,84 @@ func runList(ctx context.Context) {
 	fmt.Println()
 }
 
+// ── stats ────────────────────────────────────────────────────────────────────
+
+func runStats(ctx context.Context, args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "[!] Usage: ciotx-server license stats <license-key>")
+		os.Exit(1)
+	}
+
+	key := args[0]
+	license, err := db.GetLicenseByKey(ctx, key)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[!] License not found: %v\n", err)
+		os.Exit(1)
+	}
+
+	totalScans, lastScanAt, err := db.GetLicenseScanStats(ctx, license.ID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[!] Failed to fetch stats: %v\n", err)
+		os.Exit(1)
+	}
+
+	currentMonth := time.Now().UTC().Format("2006-01")
+	scansThisMonth := 0
+	if license.ScanMonth == currentMonth {
+		scansThisMonth = license.ScansThisMonth
+	}
+
+	status := "active"
+	if !license.IsActive {
+		status = "REVOKED"
+	} else if license.IsExpired() {
+		status = "EXPIRED"
+	}
+
+	expiry := "never"
+	if license.ExpiresAt != nil {
+		expiry = license.ExpiresAt.Format("2006-01-02")
+	}
+
+	lastScan := "never"
+	if lastScanAt != nil {
+		lastScan = lastScanAt.Format("2006-01-02 15:04 UTC")
+	}
+
+	fmt.Println()
+	fmt.Printf("  License     : %s\n", license.LicenseKey)
+	fmt.Printf("  Organization: %s\n", license.Organization)
+	fmt.Printf("  Email       : %s\n", license.Email)
+	fmt.Printf("  Plan        : %s\n", license.Plan)
+	fmt.Printf("  Status      : %s\n", status)
+	fmt.Printf("  Quota       : %d / %d  this month\n", scansThisMonth, license.MaxScansPerMonth)
+	fmt.Printf("  Total scans : %d  (all time)\n", totalScans)
+	fmt.Printf("  Last scan   : %s\n", lastScan)
+	fmt.Printf("  Expires     : %s\n", expiry)
+	fmt.Printf("  Created     : %s\n", license.CreatedAt.Format("2006-01-02"))
+
+	records, err := db.GetScanHistory(ctx, license.ID, 20)
+	if err != nil || len(records) == 0 {
+		fmt.Println()
+		return
+	}
+
+	fmt.Println()
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "  DATE\tFINDINGS\tCRITICAL\tHIGH\tDURATION\tVERSION")
+	fmt.Fprintln(w, "  ────\t────────\t────────\t────\t────────\t───────")
+	for _, rec := range records {
+		fmt.Fprintf(w, "  %s\t%d\t%d\t%d\t%s\t%s\n",
+			rec.CreatedAt.UTC().Format("2006-01-02 15:04"),
+			rec.FindingsCount, rec.CriticalCount, rec.HighCount,
+			formatDuration(rec.DurationMS),
+			rec.ClientVersion,
+		)
+	}
+	w.Flush()
+	fmt.Println()
+}
+
 // ── help ────────────────────────────────────────────────────────────────────
 
 func printLicenseHelp() {
@@ -187,6 +275,7 @@ func printLicenseHelp() {
     ciotx-server license create --org <name> --email <email> [--plan <plan>] [--scans <n>] [--expires <days>]
     ciotx-server license revoke <license-key>
     ciotx-server license list
+    ciotx-server license stats <license-key>
 
   Plans: starter (50 scans/mo) | pro (500 scans/mo) | enterprise (unlimited)
 
@@ -195,6 +284,7 @@ func printLicenseHelp() {
     ciotx-server license create --org "Trial User" --email user@example.com --expires 14
     ciotx-server license revoke ciotx_abc123...
     ciotx-server license list
+    ciotx-server license stats ciotx_abc123...
 
 `)
 }

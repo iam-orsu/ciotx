@@ -114,6 +114,100 @@ func (c *Client) Scan(req *ScanRequest) (*ScanResponse, error) {
 	return &scanResp, nil
 }
 
+// StatusResponse is the account status returned by GET /v1/status.
+type StatusResponse struct {
+	Plan             string  `json:"plan"`
+	Organization     string  `json:"organization"`
+	ScansThisMonth   int     `json:"scans_this_month"`
+	MaxScansPerMonth int     `json:"max_scans_per_month"`
+	ExpiresAt        *string `json:"expires_at,omitempty"` // ISO-8601 string or absent
+	IsActive         bool    `json:"is_active"`
+}
+
+// HistoryRecord is one scan entry from GET /v1/history.
+type HistoryRecord struct {
+	FindingsCount int    `json:"findings_count"`
+	CriticalCount int    `json:"critical_count"`
+	HighCount     int    `json:"high_count"`
+	DurationMS    int64  `json:"duration_ms"`
+	ClientVersion string `json:"client_version"`
+	CreatedAt     string `json:"created_at"`
+}
+
+// HistoryResponse is the list of recent scans from GET /v1/history.
+type HistoryResponse struct {
+	Records []*HistoryRecord `json:"records"`
+}
+
+// Status fetches the authenticated user's plan and quota information.
+func (c *Client) Status() (*StatusResponse, error) {
+	url := c.endpoint + "/v1/status"
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.licenseKey)
+	req.Header.Set("User-Agent", "ciotx/"+c.version)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("connect to ciotx backend: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10)) // 64 KB cap
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("authentication failed — run 'ciotx auth login' to re-authenticate")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("backend error (HTTP %d): %s", resp.StatusCode, string(body))
+	}
+
+	var out StatusResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("parse response: %w", err)
+	}
+	return &out, nil
+}
+
+// History fetches the authenticated user's recent scan records.
+// limit must be 1–50; values outside this range are clamped server-side.
+func (c *Client) History(limit int) (*HistoryResponse, error) {
+	url := fmt.Sprintf("%s/v1/history?limit=%d", c.endpoint, limit)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.licenseKey)
+	req.Header.Set("User-Agent", "ciotx/"+c.version)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("connect to ciotx backend: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MB cap
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("authentication failed — run 'ciotx auth login' to re-authenticate")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("backend error (HTTP %d): %s", resp.StatusCode, string(body))
+	}
+
+	var out HistoryResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("parse response: %w", err)
+	}
+	return &out, nil
+}
+
 // VerifyLicense checks if the provided license key is valid against the ciotx backend.
 func (c *Client) VerifyLicense(key string) error {
 	type verifyReq struct {

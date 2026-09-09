@@ -12,7 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/iam-orsu/ciotx/cli/pkg/api"
@@ -54,6 +56,18 @@ func main() {
 			target = args[1]
 		}
 		os.Exit(cmdScan(target))
+
+	case "status":
+		os.Exit(cmdStatus())
+
+	case "history":
+		limit := 10
+		if len(args) >= 3 && args[1] == "--limit" {
+			if n, err := strconv.Atoi(args[2]); err == nil && n >= 1 && n <= 50 {
+				limit = n
+			}
+		}
+		os.Exit(cmdHistory(limit))
 
 	case "version", "--version", "-v":
 		fmt.Printf("ciotx %s (commit %s, built %s)\n", Version, Commit, BuildDate)
@@ -228,12 +242,120 @@ func cmdScan(target string) int {
 		}
 	}
 
-	fmt.Printf("\n  Report  : %s\n", absPath(htmlPath))
+	fmt.Printf("\n  Report    : %s\n", absPath(htmlPath))
 	fmt.Printf("  Scan time : %.1fs\n", duration)
+	if scanResp.Stats.EstimatedCostUSD > 0 {
+		fmt.Printf("  Cost      : $%.4f\n", scanResp.Stats.EstimatedCostUSD)
+	}
 	fmt.Println(strings.Repeat("─", 56))
 	fmt.Println()
 
 	return 0
+}
+
+// =====================================================================
+// ciotx status
+// =====================================================================
+
+func cmdStatus() int {
+	cfg, err := config.Load()
+	if err != nil || !cfg.IsAuthenticated() {
+		fmt.Println("\n[!] Not authenticated. Run 'ciotx auth login' first.")
+		return 1
+	}
+
+	client := api.NewClient(APIEndpoint, cfg.LicenseKey, Version)
+	status, err := client.Status()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\n[!] %v\n", err)
+		return 1
+	}
+
+	fmt.Println()
+	fmt.Println(strings.Repeat("─", 50))
+	fmt.Println("  ciotx  Account Status")
+	fmt.Println(strings.Repeat("─", 50))
+	fmt.Printf("  Plan         : %s\n", status.Plan)
+	fmt.Printf("  Organization : %s\n", status.Organization)
+	if status.MaxScansPerMonth < 0 {
+		fmt.Printf("  Scans used   : unlimited (operator)\n")
+	} else {
+		fmt.Printf("  Scans used   : %d / %d  this month\n",
+			status.ScansThisMonth, status.MaxScansPerMonth)
+	}
+	activeStr := "active"
+	if !status.IsActive {
+		activeStr = "revoked"
+	}
+	fmt.Printf("  Status       : %s\n", activeStr)
+	if status.ExpiresAt != nil {
+		fmt.Printf("  Expires      : %s\n", *status.ExpiresAt)
+	} else {
+		fmt.Printf("  Expires      : never\n")
+	}
+	fmt.Println(strings.Repeat("─", 50))
+	fmt.Println()
+	return 0
+}
+
+// =====================================================================
+// ciotx history
+// =====================================================================
+
+func cmdHistory(limit int) int {
+	cfg, err := config.Load()
+	if err != nil || !cfg.IsAuthenticated() {
+		fmt.Println("\n[!] Not authenticated. Run 'ciotx auth login' first.")
+		return 1
+	}
+
+	client := api.NewClient(APIEndpoint, cfg.LicenseKey, Version)
+	hist, err := client.History(limit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\n[!] %v\n", err)
+		return 1
+	}
+
+	fmt.Println()
+	fmt.Println(strings.Repeat("─", 66))
+	fmt.Println("  ciotx  Scan History")
+	fmt.Println(strings.Repeat("─", 66))
+
+	if len(hist.Records) == 0 {
+		fmt.Println("  No scans recorded yet.")
+		fmt.Println(strings.Repeat("─", 66))
+		fmt.Println()
+		return 0
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "  #\tDATE\tFINDINGS\tCRITICAL\tHIGH\tDURATION")
+	for i, rec := range hist.Records {
+		dur := formatDurationMS(rec.DurationMS)
+		fmt.Fprintf(w, "  %d\t%s\t%d\t%d\t%d\t%s\n",
+			i+1, rec.CreatedAt,
+			rec.FindingsCount, rec.CriticalCount, rec.HighCount,
+			dur,
+		)
+	}
+	w.Flush()
+
+	fmt.Println(strings.Repeat("─", 66))
+	if len(hist.Records) == limit {
+		fmt.Printf("  Showing last %d scans. Use --limit N to show more (max 50).\n", limit)
+	} else {
+		fmt.Printf("  Showing all %d scan(s).\n", len(hist.Records))
+	}
+	fmt.Println()
+	return 0
+}
+
+func formatDurationMS(ms int64) string {
+	d := time.Duration(ms) * time.Millisecond
+	if d < time.Minute {
+		return fmt.Sprintf("%.0fs", d.Seconds())
+	}
+	return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
 }
 
 func printHelp() {
@@ -241,10 +363,13 @@ func printHelp() {
   ciotx — Security Auditor
 
   Usage:
-    ciotx auth login          Authenticate with your license key
-    ciotx scan .              Scan the current directory
-    ciotx scan /path/to/repo  Scan a specific directory
-    ciotx version             Print version and build info
+    ciotx auth login             Authenticate with your license key
+    ciotx scan .                 Scan the current directory
+    ciotx scan /path/to/repo     Scan a specific directory
+    ciotx status                 Show plan, quota, and account status
+    ciotx history                Show recent scan history
+    ciotx history --limit 20     Show up to 20 recent scans (max 50)
+    ciotx version                Print version and build info
 
   Get your license key at %s
 `, WebsiteURL)

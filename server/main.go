@@ -81,6 +81,14 @@ func main() {
 		handlers.RecoveryMiddleware(handlers.AuthMiddleware(handlers.ScanHandler)),
 	)
 
+	mux.HandleFunc("/v1/status",
+		handlers.RecoveryMiddleware(handlers.AuthMiddleware(handlers.StatusHandler)),
+	)
+
+	mux.HandleFunc("/v1/history",
+		handlers.RecoveryMiddleware(handlers.AuthMiddleware(handlers.HistoryHandler)),
+	)
+
 	// ── HTTP Server ───────────────────────────────────────────────────
 	srv := &http.Server{
 		Addr:              ":" + port,

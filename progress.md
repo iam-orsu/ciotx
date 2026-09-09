@@ -343,12 +343,105 @@ After these three fixes, all Phase 1 and Phase 2 code is clean. No further issue
 
 ---
 
-## 6. Phase 3 & Beyond: Future Architecture
+## 6. Phase 3 — User Self-Service & Scan Visibility (COMPLETED v3.0.0)
 
-### Phase 3: Usage Metering, Quotas & Alerting
-* Automatic monthly quota resets via cron / background worker.
-* Webhook notifications (Slack / Microsoft Teams) when critical vulnerabilities are found.
-* Rate limiting per license key (in addition to IP-based rate limiting in Nginx).
+Phase 3 surfaces the data collected in Phase 2 to both end users and operators, and adds a server-side concurrency limiter to prevent resource exhaustion.
+
+### What Was Built
+
+#### A. `ciotx status` — New CLI Command
+Users can now check their own plan and quota without contacting support:
+```
+ciotx status
+```
+Output:
+```
+  Plan         : pro
+  Organization : Acme Corp
+  Scans used   : 12 / 500  this month
+  Status       : active
+  Expires      : 2027-01-01
+```
+
+**Server**: `GET /v1/status` — protected by AuthMiddleware. Reads the license from the request context (zero extra DB round-trips). Applies the same lazy monthly reset as the quota check. Master key returns `plan: master, max: -1 (unlimited)`.
+
+**CLI** (`cli/cmd/ciotx/main.go`): `cmdStatus()` calls `client.Status()`, formats and prints.
+
+#### B. `ciotx history` — New CLI Command
+Users can see their recent scan results:
+```
+ciotx history
+ciotx history --limit 20
+```
+Output:
+```
+  #   DATE                 FINDINGS   CRITICAL   HIGH   DURATION
+  1   2026-09-08 14:22    14         3          5      4m12s
+  2   2026-09-07 09:11    0          0          0      2m33s
+```
+
+**Server**: `GET /v1/history?limit=N` — protected by AuthMiddleware. Queries `scan_history` by `license_id`. DB query uses the new index on `(license_id, created_at DESC)`. Master key returns empty list (no license record).
+
+**DB** (`server/internal/db/history.go`):
+- `GetScanHistory(ctx, licenseID, limit)` — returns newest-first records, limit 1–50.
+- `GetLicenseScanStats(ctx, licenseID)` — returns total scans and last scan time for admin stats.
+
+**Migration** (`003_scan_history_indexes.sql`): `CREATE INDEX IF NOT EXISTS idx_scan_history_license_created ON scan_history (license_id, created_at DESC)` — makes per-license queries O(log n) instead of full-table scan.
+
+#### C. Scan Cost Shown in CLI Output
+`EstimatedCostUSD` was already computed and returned in the scan response but never shown. Now surfaced in the scan summary:
+```
+  Scan time : 4m12s
+  Cost      : $0.0043
+```
+Only shown when `> 0` (zero means master key or cost calculation not applicable).
+
+#### D. Per-License Concurrency Limiter (`server/internal/ratelimit/`)
+**Problem**: One license key could be used to run N simultaneous scans, each consuming 25MB RAM and multiple LLM API calls. Nginx rate-limits by IP but not by key.
+
+**Solution**: `ConcurrencyLimiter` — a `sync.Map` of atomic `int64` counters, one per license key. Zero external dependencies.
+- Max 2 concurrent scans per license key.
+- Master key is exempt (operator access).
+- `Acquire` is O(1) amortized. `Release` called via `defer` in `ScanHandler`.
+- `New(0)` is defensive — clamps to 1.
+
+Integrated in `ScanHandler`: slot acquired after quota check, released on any return path via `defer`.
+
+#### E. Operator: `ciotx-server license stats <key>`
+New admin subcommand — full picture of one customer's usage:
+```
+docker compose exec api /ciotx-server license stats ciotx_abc123...
+```
+Output includes: plan, quota, total all-time scans, last scan time, expiry, and a table of the last 20 scans with findings, severity breakdown, and duration.
+
+### New Files
+| File | Purpose |
+|:---|:---|
+| `server/internal/ratelimit/ratelimit.go` | Per-key concurrency limiter |
+| `server/internal/ratelimit/ratelimit_test.go` | 6 tests including concurrent goroutine stress |
+| `server/internal/db/history.go` | `GetScanHistory`, `GetLicenseScanStats` |
+| `server/internal/db/migrations/003_scan_history_indexes.sql` | Index on scan_history |
+| `server/handlers/status.go` | `GET /v1/status` handler |
+| `server/handlers/history.go` | `GET /v1/history` handler |
+
+### Modified Files
+| File | Change |
+|:---|:---|
+| `server/main.go` | Register `/v1/status`, `/v1/history` routes |
+| `server/handlers/scan.go` | Import ratelimit, Acquire/Release around scan pipeline |
+| `server/admin/license.go` | `license stats` subcommand, `formatDuration` helper |
+| `cli/pkg/api/client.go` | `Status()`, `History()` methods + response types |
+| `cli/cmd/ciotx/main.go` | `status`, `history` commands; cost line in scan output |
+
+### Architectural Invariants Added (Phase 3)
+1. **Concurrency is per-key, not per-IP**: the rate limiter key is `license.ID` (UUID), independent of where the request originates.
+2. **Status quota display applies the same lazy-reset rule as IsQuotaExceeded**: if `scan_month != currentMonth`, the displayed count is 0, consistent with what the user actually sees enforced.
+3. **ExpiresAt is formatted as `YYYY-MM-DD` string at the server**: the CLI receives a human-readable date, not a raw RFC 3339 timestamp.
+4. **History endpoint returns empty (not error) when DB is unavailable**: graceful degradation consistent with Phase 2's non-fatal DB init policy.
+
+---
+
+## 7. Phase 4 & Beyond: Future Architecture
 
 ### Phase 4: Operator Admin Web Control Plane
 * Single-page dashboard (Go embedded template or lightweight SPA) on `https://${DOMAIN_NAME}/admin`.

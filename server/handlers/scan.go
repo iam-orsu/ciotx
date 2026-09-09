@@ -13,8 +13,13 @@ import (
 
 	"github.com/iam-orsu/ciotx/server/internal/db"
 	"github.com/iam-orsu/ciotx/server/internal/llm"
+	"github.com/iam-orsu/ciotx/server/internal/ratelimit"
 	"github.com/iam-orsu/ciotx/server/internal/types"
 )
+
+// scanLimiter caps concurrent scans per license key to prevent resource exhaustion.
+// Master key (nil license) is exempt — it's the operator.
+var scanLimiter = ratelimit.New(2)
 
 // =====================================================================
 // REQUEST / RESPONSE MODELS
@@ -63,6 +68,16 @@ func ScanHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("monthly scan limit reached (%d/%d) — upgrade your plan",
 				license.ScansThisMonth, license.MaxScansPerMonth))
 		return
+	}
+
+	// ── Per-key concurrency limit (DB licenses only) ──────────────────
+	if license != nil {
+		if !scanLimiter.Acquire(license.ID) {
+			writeError(w, http.StatusTooManyRequests,
+				"too many concurrent scans — wait for your current scan to complete")
+			return
+		}
+		defer scanLimiter.Release(license.ID)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20)) // 32MB max
