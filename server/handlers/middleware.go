@@ -27,16 +27,15 @@ func RecoveryMiddleware(next http.HandlerFunc) http.HandlerFunc {
 				fmt.Printf("[ciotx-server] PANIC [req=%s] %v\n%s\n", reqID, rec, debug.Stack())
 				writeError(w, http.StatusInternalServerError, "internal server error")
 			}
+			// Access log inside defer so it always runs, even on panic.
+			fmt.Printf("[ciotx-server] %s %s %s [req=%s]\n",
+				r.Method, r.URL.Path,
+				time.Since(start).Round(time.Millisecond),
+				reqID,
+			)
 		}()
 
 		next(w, r)
-
-		// Structured access log: method, path, duration, request ID
-		fmt.Printf("[ciotx-server] %s %s %s [req=%s]\n",
-			r.Method, r.URL.Path,
-			time.Since(start).Round(time.Millisecond),
-			reqID,
-		)
 	}
 }
 

@@ -10,6 +10,12 @@ import (
 	"github.com/iam-orsu/ciotx/server/internal/types"
 )
 
+// Package-level regex for stripping markdown code fences from LLM responses.
+var (
+	auditFenceOpenRe  = regexp.MustCompile("```(?:json)?\\s*")
+	auditFenceCloseRe = regexp.MustCompile("\\s*```")
+)
+
 const auditSystemPrompt = `You are a skeptical, cynical Application Security Triage Engineer.
 Your job is to scrutinize candidate vulnerability findings and eliminate false positives, hallucinated issues, and unexploitable edge cases.
 
@@ -114,10 +120,8 @@ Return strictly valid JSON with {"verdicts": [...]}`, len(items), string(itemsJS
 
 	clean := strings.TrimSpace(content)
 	if strings.Contains(clean, "```") {
-		re := regexp.MustCompile("```(?:json)?\\s*")
-		clean = re.ReplaceAllString(clean, "")
-		re2 := regexp.MustCompile("\\s*```")
-		clean = strings.TrimSpace(re2.ReplaceAllString(clean, ""))
+		clean = auditFenceOpenRe.ReplaceAllString(clean, "")
+		clean = strings.TrimSpace(auditFenceCloseRe.ReplaceAllString(clean, ""))
 	}
 
 	rejected := 0

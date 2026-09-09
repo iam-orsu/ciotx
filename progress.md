@@ -317,6 +317,32 @@ A comprehensive security and correctness audit was performed across all files in
 
 ---
 
+## 5.6. Final Combined QA Pass (v2.0.2) — COMPLETED
+
+A final end-to-end audit of all Phase 1 + Phase 2 files was performed before proceeding to Phase 3. Three remaining issues were found and fixed.
+
+### Issues Fixed
+
+#### A. Regex Recompiled Per Audit Call (`server/internal/llm/audit.go`)
+- **Problem**: The same two `regexp.MustCompile` calls for stripping markdown code fences existed inside `RunAudit`, compiled on every audit invocation. Same class of issue as the `extractFilesContent` regex fix in v2.0.1.
+- **Fix**: Moved both regexes to package-level `var` (`auditFenceOpenRe`, `auditFenceCloseRe`) compiled once at process start.
+
+#### B. Access Log Skipped on Panic (`server/handlers/middleware.go`)
+- **Problem**: The structured access log (`[ciotx-server] METHOD /path 123ms [req=id]`) was placed after `next(w, r)`. On a panic, execution jumps to the `defer/recover` block — the access log line was never written for panicked requests.
+- **Fix**: Moved the access log `fmt.Printf` inside the `defer` function (after the panic recovery block), so it always runs regardless of whether the handler panicked.
+
+#### C. `--scans` Accepts Zero or Negative Values (`server/admin/license.go`)
+- **Problem**: The `--scans` flag had no minimum validation. Passing `--scans 0` or `--scans -1` would be stored in the DB. A negative `max_scans_per_month` makes `IsQuotaExceeded()` always return false (effectively unlimited scans for that license).
+- **Fix**: Added `if *scans < 1` guard with a clear error message before calling `db.CreateLicense`.
+
+### Audit Result
+After these three fixes, all Phase 1 and Phase 2 code is clean. No further issues found across:
+- `server/main.go`, `handlers/`, `internal/db/`, `internal/llm/`, `internal/types/`, `admin/`
+- `cli/cmd/ciotx/main.go`, `cli/pkg/api/`, `cli/pkg/config/`, `cli/pkg/scanner/`, `cli/pkg/report/`
+- `nginx/`, `docker-compose.yml`, `.github/workflows/`, `scripts/deploy.sh`
+
+---
+
 ## 6. Phase 3 & Beyond: Future Architecture
 
 ### Phase 3: Usage Metering, Quotas & Alerting

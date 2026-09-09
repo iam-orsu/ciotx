@@ -80,6 +80,10 @@ func runCreate(ctx context.Context, args []string) {
 		fmt.Fprintf(os.Stderr, "[!] invalid plan %q — must be one of: starter, pro, enterprise\n", *plan)
 		os.Exit(1)
 	}
+	if *scans < 1 {
+		fmt.Fprintln(os.Stderr, "[!] --scans must be at least 1")
+		os.Exit(1)
+	}
 
 	var expiresAt *time.Time
 	if *expireDays > 0 {
