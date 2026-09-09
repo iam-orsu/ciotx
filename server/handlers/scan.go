@@ -155,6 +155,9 @@ func ScanHandler(w http.ResponseWriter, r *http.Request) {
 	// Run in a background goroutine so the HTTP response is not delayed.
 	if license != nil {
 		clientVersion := strings.TrimPrefix(r.Header.Get("User-Agent"), "ciotx/")
+		if len(clientVersion) > 32 {
+			clientVersion = clientVersion[:32]
+		}
 		criticalCount := 0
 		highCount := 0
 		for _, f := range final {

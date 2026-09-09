@@ -10,6 +10,10 @@ import (
 	"github.com/iam-orsu/ciotx/server/internal/types"
 )
 
+// jsonObjectRe extracts the outermost JSON object from a freeform LLM response
+// as a last-resort fallback when the response is neither wrapped JSON nor a bare array.
+var jsonObjectRe = regexp.MustCompile(`\{[\s\S]*\}`)
+
 const discoverySystemPrompt = `You are an elite offensive security researcher and application security engineer with deep expertise in source code vulnerability analysis.
 
 Your task: Conduct an exhaustive source code security audit to find REAL, EXPLOITABLE security vulnerabilities.
@@ -80,10 +84,8 @@ Return strictly valid JSON with {"findings": [...]}. The 'evidence' field must b
 func parseFindings(content string) ([]*types.Finding, error) {
 	clean := strings.TrimSpace(content)
 	if strings.Contains(clean, "```") {
-		re := regexp.MustCompile("```(?:json)?\\s*")
-		clean = re.ReplaceAllString(clean, "")
-		re2 := regexp.MustCompile("\\s*```")
-		clean = strings.TrimSpace(re2.ReplaceAllString(clean, ""))
+		clean = auditFenceOpenRe.ReplaceAllString(clean, "")
+		clean = strings.TrimSpace(auditFenceCloseRe.ReplaceAllString(clean, ""))
 	}
 
 	var rawFindings []json.RawMessage
@@ -98,8 +100,7 @@ func parseFindings(content string) ([]*types.Finding, error) {
 		if err2 := json.Unmarshal([]byte(clean), &arr); err2 == nil {
 			rawFindings = arr
 		} else {
-			re := regexp.MustCompile(`\{[\s\S]*\}`)
-			match := re.FindString(content)
+			match := jsonObjectRe.FindString(content)
 			if match != "" {
 				if err3 := json.Unmarshal([]byte(match), &wrapper); err3 == nil {
 					rawFindings = wrapper.Findings

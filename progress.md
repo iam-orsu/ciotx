@@ -465,6 +465,28 @@ A focused QA pass across all Phase 3 code. Three issues found and fixed.
 
 ---
 
+## 6.2. Final Combined QA Audit (v3.0.2) — COMPLETED
+
+A full read of every source file across all three phases. Two issues found and fixed.
+
+### Issues Fixed
+
+#### A. Three Regexes Recompiled Per Discovery Call (`server/internal/llm/discovery.go`)
+- **Problem**: `parseFindings` called `regexp.MustCompile` three times inline on every invocation — the two code-fence patterns (identical to the package-level `auditFenceOpenRe`/`auditFenceCloseRe` in `audit.go`) and a fallback JSON-object extractor `\{[\s\S]*\}`. `parseFindings` is called once per chunk; for a large codebase this wastes CPU and GC.
+- **Fix**: Replaced the two inline fence compiles with the existing package-level vars `auditFenceOpenRe`/`auditFenceCloseRe` (same `llm` package, directly accessible). Added a new package-level `jsonObjectRe` for the fallback pattern.
+
+#### B. `clientVersion` Not Capped Before DB Write (`server/handlers/scan.go`)
+- **Problem**: `clientVersion := strings.TrimPrefix(r.Header.Get("User-Agent"), "ciotx/")` — if a malformed or unusually long `User-Agent` header was sent, the string would exceed `VARCHAR(32)` in `scan_history.client_version`, causing PostgreSQL to reject the INSERT. The error is non-fatal (logged as a warning), but the scan history row would be silently missing.
+- **Fix**: Added `if len(clientVersion) > 32 { clientVersion = clientVersion[:32] }` before the background goroutine is launched.
+
+### Audit Result
+After these two fixes, all Phase 1, 2, and 3 code is clean. No further issues found across:
+- `server/`: `main.go`, `handlers/`, `internal/db/`, `internal/llm/`, `internal/ratelimit/`, `internal/types/`, `admin/`
+- `cli/`: `cmd/ciotx/main.go`, `pkg/api/`, `pkg/config/`, `pkg/scanner/`, `pkg/report/`
+- Infrastructure: `server/Dockerfile`, `docker-compose.yml`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `scripts/deploy.sh`, `.gitignore`
+
+---
+
 ## 7. Phase 4 & Beyond: Future Architecture
 
 ### Phase 4: Operator Admin Web Control Plane
