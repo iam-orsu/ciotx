@@ -288,6 +288,7 @@ curl -fsSL "\${URL}" -o "\${TMP}/ciotx" || {
 
 chmod +x "\${TMP}/ciotx"
 
+sudo mkdir -p "\${INSTALL_DIR}"
 if [ -w "\${INSTALL_DIR}" ]; then
   mv "\${TMP}/ciotx" "\${INSTALL_DIR}/ciotx"
 else
