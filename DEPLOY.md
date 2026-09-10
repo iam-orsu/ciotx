@@ -1,84 +1,147 @@
-# Deploying ciotx on a Fresh VPS
+# ciotx — Complete Deployment Guide
 
-This guide walks you through a complete production deployment of ciotx on a fresh Ubuntu VPS — from DNS configuration to issuing your first license key and scanning a real codebase. Everything runs in Docker. The whole process takes about 10–15 minutes.
+This guide takes you from zero to a fully running ciotx instance — with GitHub PR integration enabled — on a fresh VPS. Follow every step in order. The whole thing takes about 15–20 minutes.
 
----
-
-## What You Will End Up With
-
-- `https://yourdomain.com/v1/scan` — the scan API your users hit
-- `https://yourdomain.com/admin` — your operator dashboard (license management, usage stats)
-- `https://yourdomain.com/install.sh` — one-line installer for the `ciotx` CLI
-- `https://yourdomain.com/health` — health endpoint for uptime monitoring
-- Auto-renewing TLS certificate via Let's Encrypt
-- PostgreSQL database with automatic schema migrations
-- Optional: GitHub App integration that scans every push and opens fix PRs automatically
+At the end, your friend will be able to run `ciotx scan .` on their laptop, see all the vulnerabilities in their repo, and every push they make will automatically open a GitHub pull request with the fix already written.
 
 ---
 
-## Requirements
+## What You Will Have When This Is Done
 
-| Item | Minimum | Recommended |
-|:-----|:--------|:------------|
-| VPS RAM | 2 GB | 4 GB |
-| VPS CPU | 1 vCPU | 2 vCPU |
-| Disk | 20 GB | 40 GB |
-| OS | Ubuntu 22.04 LTS | Ubuntu 24.04 LTS |
-| Domain | Required | — |
-| DeepSeek API Key | Required | — |
-
-> **Why DeepSeek?** ciotx uses DeepSeek's reasoning model (`deepseek-reasoner`) for vulnerability discovery and a fast chat model (`deepseek-chat`) for adversarial verification. The API key lives entirely inside your Docker container and is never exposed to your users.
+- `https://yourdomain.com` — your ciotx server, live and serving real traffic
+- `https://yourdomain.com/admin` — your dashboard to issue and manage license keys
+- `https://yourdomain.com/install.sh` — the one-liner your friends/customers run to install the CLI
+- GitHub App installed on any repo → every push triggers a deep security scan → PRs with fixes open automatically
+- Auto-renewing TLS certificate (Let's Encrypt)
+- PostgreSQL database with automatic migrations
 
 ---
 
-## Step 1 — Get Your DeepSeek API Key
+## Before You Start — Collect Everything
 
-1. Go to [platform.deepseek.com](https://platform.deepseek.com)
+You need three things ready before you run a single command. Get them all first so you are not hunting for things mid-deploy.
+
+### Thing 1 — DeepSeek API Key
+
+ciotx uses DeepSeek's AI models internally. This key never leaves your server — your users never see it.
+
+1. Go to **[platform.deepseek.com](https://platform.deepseek.com)**
 2. Sign up or log in
-3. Navigate to **API Keys** → **Create new secret key**
-4. Copy the key — it starts with `sk-`
-5. Add some credits to your account (a typical scan costs $0.01–$0.05)
-
-Keep this key handy. You will paste it into `.env` in a few minutes.
+3. Click **API Keys** in the left sidebar → **Create new secret key**
+4. Copy the key (starts with `sk-`) — you need it in Step 5
+5. Add credits to your account. A typical codebase scan costs **$0.01–$0.05**
 
 ---
 
-## Step 2 — Point Your Domain at the VPS
+### Thing 2 — GitHub App (Required for Auto-Scanning and Fix PRs)
 
-Before touching the server, set up DNS. Let's Encrypt needs to verify your domain before issuing a TLS certificate.
+This is what makes ciotx scan code automatically on every push and open pull requests with fixes. Do this before you deploy.
 
-1. Log into your domain registrar or DNS provider
-2. Create an **A record**:
-   - **Name:** `api` (or `@` for root domain, or whatever subdomain you want)
-   - **Value:** your VPS public IP address
-   - **TTL:** 300 (5 minutes is fine)
+**Go to [github.com/settings/apps/new](https://github.com/settings/apps/new)**
 
-**Example:**
-```
-api.yourdomain.com  →  A  →  123.45.67.89
-```
+Fill in the form exactly like this:
 
-DNS propagation usually takes 1–5 minutes. You can verify it with:
+| Field | What to put |
+|:------|:------------|
+| **GitHub App name** | `ciotx` (or `ciotx-security`, must be globally unique) |
+| **Homepage URL** | `https://yourdomain.com` (your actual domain from Step 3) |
+| **Webhook** | Check **Active** |
+| **Webhook URL** | `https://yourdomain.com/webhooks/github` |
+| **Webhook secret** | Run `openssl rand -hex 32` in your terminal — paste the output here AND save it, you need it later |
+
+Scroll down to **Repository permissions** and set:
+
+| Permission | Level |
+|:-----------|:------|
+| **Contents** | Read and write |
+| **Pull requests** | Read and write |
+| **Metadata** | Read-only (auto-set) |
+
+Scroll down to **Subscribe to events** and check:
+- ✅ **Push**
+- ✅ **Installation**
+
+At the bottom, select **Any account** (so your customers can install it on their repos).
+
+Click **Create GitHub App**.
+
+**After creation — collect three values:**
+
+**App ID** — shown right at the top of the App settings page under the App name. It's a number like `123456`. Copy it.
+
+**Private Key** — scroll down to the **Private keys** section → click **Generate a private key**. A `.pem` file downloads to your computer. Do not lose it.
+
+Now base64-encode the private key. Run this in your terminal (on your laptop, where the file downloaded):
+
 ```bash
-dig +short api.yourdomain.com
-# Should print your VPS IP
+# macOS / Linux
+base64 -i your-app-name.2024-01-01.private-key.pem | tr -d '\n'
+
+# If that doesn't work on Linux:
+base64 -w 0 your-app-name.2024-01-01.private-key.pem
 ```
 
-> Do not proceed to Step 4 until the DNS record resolves correctly. The SSL certificate request will fail if DNS has not propagated.
+Copy the entire output — it will be one very long line starting with `LS0t...`. This is your `GITHUB_APP_PRIVATE_KEY_BASE64`.
+
+**Webhook Secret** — this is what you generated with `openssl rand -hex 32` and pasted into the form. You saved it, right? That's your `GITHUB_WEBHOOK_SECRET`.
+
+You now have three values:
+- `GITHUB_APP_ID` = the number (e.g. `123456`)
+- `GITHUB_APP_PRIVATE_KEY_BASE64` = the long base64 string
+- `GITHUB_WEBHOOK_SECRET` = the hex string you generated
+
+Keep these handy for Step 5.
 
 ---
 
-## Step 3 — SSH into Your VPS
+### Thing 3 — A Domain Name Pointing at Your VPS
+
+You need a domain with an A record pointing to your VPS IP. Let's Encrypt will not issue a certificate without this.
+
+1. Get a VPS — any provider (DigitalOcean, Hetzner, Vultr, Linode, OVH). **Minimum 2 GB RAM**, Ubuntu 22.04 or 24.04 LTS.
+2. Note its public IP (e.g. `123.45.67.89`)
+3. In your domain registrar's DNS settings, add an A record:
+   - **Name:** `api` (creates `api.yourdomain.com`) or `@` (root domain)
+   - **Value:** your VPS IP
+   - **TTL:** 300
+
+Verify it propagated before continuing:
+```bash
+# Run this on your laptop
+dig +short api.yourdomain.com
+# Should print your VPS IP. If it prints nothing, wait 2–5 minutes and try again.
+```
+
+Do not proceed until `dig` returns the correct IP.
+
+---
+
+## Step 1 — SSH Into Your VPS
 
 ```bash
 ssh root@YOUR_VPS_IP
 ```
 
-If your provider created a non-root user, use `sudo -i` to become root or prefix the deploy command with `sudo`.
+Most VPS providers give you root access. If yours created a non-root user, run `sudo -i` after logging in.
 
 ---
 
-## Step 4 — Clone the Repository
+## Step 2 — Open Your Firewall
+
+Most VPS providers block ports by default. Open what you need:
+
+```bash
+# Ubuntu with UFW
+ufw allow 22/tcp    # SSH (don't lock yourself out)
+ufw allow 80/tcp    # HTTP (needed for SSL cert + ACME renewal)
+ufw allow 443/tcp   # HTTPS
+ufw --force enable
+ufw status
+```
+
+---
+
+## Step 3 — Clone the Repository
 
 ```bash
 git clone https://github.com/iam-orsu/ciotx.git
@@ -87,59 +150,65 @@ cd ciotx
 
 ---
 
-## Step 5 — Configure Your Environment
+## Step 4 — Generate Your Secret Values
 
-Copy the example config and open it for editing:
+Run these on the VPS now. You will paste the output into `.env` in the next step.
+
+```bash
+# Master license key — your personal admin bypass key
+echo "MASTER_LICENSE_KEY=ciotx_$(openssl rand -hex 32)"
+
+# PostgreSQL password
+echo "POSTGRES_PASSWORD=$(openssl rand -hex 32)"
+
+# Admin dashboard password
+echo "ADMIN_PASSWORD=$(openssl rand -base64 18 | tr -d '=+/' | cut -c1-24)"
+```
+
+Copy each output line. You need these in a moment.
+
+---
+
+## Step 5 — Configure Your Environment
 
 ```bash
 cp .env.example .env
 nano .env
 ```
 
-Fill in every variable. Here is exactly what each one means:
+Fill in every single value. Here is a completed example — replace everything with your real values:
 
 ```bash
-# ── Your domain (the A record you created in Step 2) ──────────────────
+# ── Your domain ────────────────────────────────────────────────────────
 DOMAIN_NAME=api.yourdomain.com
 
 # ── Your VPS public IP ─────────────────────────────────────────────────
 VPS_SERVER_IP=123.45.67.89
 
-# ── Email for Let's Encrypt — receives expiry warnings ────────────────
+# ── Email for Let's Encrypt ────────────────────────────────────────────
 SSL_EMAIL=you@youremail.com
 
-# ── DeepSeek API key (from Step 1) ────────────────────────────────────
-# This key NEVER leaves your server. Users only talk to your domain.
+# ── DeepSeek API key (from Thing 1) ───────────────────────────────────
 LLM_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
-# ── Master license key ────────────────────────────────────────────────
-# This is your personal bypass key for testing. Generate a strong one:
-#   openssl rand -hex 32
-MASTER_LICENSE_KEY=ciotx_prod_your_strong_random_value_here
+# ── Generated secrets (from Step 4) ───────────────────────────────────
+MASTER_LICENSE_KEY=ciotx_a1b2c3d4e5f6...your generated value...
+POSTGRES_PASSWORD=a1b2c3d4e5f6...your generated value...
+ADMIN_PASSWORD=YourGeneratedAdminPassword
 
-# ── PostgreSQL password ────────────────────────────────────────────────
-# Generate with: openssl rand -hex 32
-POSTGRES_PASSWORD=your_strong_database_password_here
-
-# ── Admin panel password ──────────────────────────────────────────────
-# Password for /admin dashboard. Leave empty to disable the admin panel.
-# Generate with: openssl rand -base64 24
-ADMIN_PASSWORD=your_strong_admin_password_here
-
-# ── GitHub App integration (optional — skip for now, add later) ───────
-# Leave these three lines as-is if you don't need GitHub PR integration.
-GITHUB_APP_ID=
-GITHUB_APP_PRIVATE_KEY_BASE64=
-GITHUB_WEBHOOK_SECRET=
+# ── GitHub App (from Thing 2) ─────────────────────────────────────────
+GITHUB_APP_ID=123456
+GITHUB_APP_PRIVATE_KEY_BASE64=LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQo...
+GITHUB_WEBHOOK_SECRET=a1b2c3d4e5f6...your webhook secret...
 ```
 
-**Save the file** (`Ctrl+O`, `Enter`, `Ctrl+X` in nano).
+**Save the file:** `Ctrl+O` → `Enter` → `Ctrl+X`
 
-> **Security:** `.env` is in `.gitignore`. It will never be committed. Keep a secure copy elsewhere — if you lose it, you lose your master key.
+> **Keep a secure backup of `.env`.** It contains your master key and all secrets. The `.gitignore` prevents it from being committed, but store a copy somewhere safe (password manager, encrypted note, etc.).
 
 ---
 
-## Step 6 — Run the Deploy Script
+## Step 6 — Deploy
 
 ```bash
 chmod +x scripts/deploy.sh
@@ -148,83 +217,97 @@ sudo ./scripts/deploy.sh
 
 The script will:
 
-1. **Validate** your `.env` — catches common mistakes (placeholder values, weak passwords, wrong key format)
-2. **Install Docker** — if not already installed (uses the official `get.docker.com` script)
-3. **Verify DNS** — confirms your domain resolves to the right IP before requesting a certificate
-4. **Obtain SSL certificate** — starts a temporary nginx to complete the Let's Encrypt HTTP-01 challenge
-5. **Build CLI binaries** — compiles `ciotx` for Linux, macOS, and Windows with your domain baked in
-6. **Build Docker images** — multi-stage Go build + nginx config generation
-7. **Launch the full stack** — postgres, api, nginx, certbot in Docker
-8. **Health check** — polls `https://yourdomain.com/health` until it returns 200
+1. **Validate** your `.env` — all required vars including GitHub credentials
+2. **Install Docker** — if not already present
+3. **Verify DNS** — confirms your domain resolves before touching certificates
+4. **Get SSL certificate** — automatic via Let's Encrypt
+5. **Build CLI binaries** — compiles `ciotx` for Linux, macOS, and Windows with your domain baked in as the API endpoint
+6. **Build and launch Docker stack** — postgres, api server, nginx, certbot
+7. **Health check** — polls your domain until it responds 200
 
-**Expected output (abbreviated):**
+You will see output like this:
+
 ```
-[*] Step 0 — Configuration
+══════════════════════════════════════════════
+  Step 0 — Configuration
+══════════════════════════════════════════════
+
 [+] Configuration validated:
 [*]   Domain : api.yourdomain.com
 [*]   VPS IP : 123.45.67.89
 
-[*] Step 1 — Docker
+══════════════════════════════════════════════
+  Step 1 — Docker
+══════════════════════════════════════════════
+
 [+] Docker 27.3.1 already installed.
 
-[*] Step 2 — DNS Verification
-[+] DNS OK: api.yourdomain.com → 123.45.67.89
+══════════════════════════════════════════════
+  Step 3 — SSL Certificate
+══════════════════════════════════════════════
 
-[*] Step 3 — SSL Certificate
 [+] SSL certificate obtained for api.yourdomain.com!
 
-[*] Step 4 — Building CLI Binaries
-[+] All CLI binaries built in dist/
+══════════════════════════════════════════════
+  Step 5 — Building & Deploying
+══════════════════════════════════════════════
 
-[*] Step 5 — Building & Deploying
-[*] Building Docker images...
+[*] Building Docker images (this takes a few minutes on first run)...
 [*] Starting all services...
-
-[*] Step 6 — Health Verification
 [+] Health check passed — API is live at https://api.yourdomain.com
 
 ╔══════════════════════════════════════════════╗
 ║         ciotx Deployed Successfully!         ║
 ╚══════════════════════════════════════════════╝
+
+  API Endpoint  : https://api.yourdomain.com
+  Admin Panel   : https://api.yourdomain.com/admin
+  Install Script: https://api.yourdomain.com/install.sh
+
+  Your master license key: ciotx_a1b2c3d4...
 ```
 
-The entire process takes **3–8 minutes** depending on VPS speed and network.
+Total time: **5–10 minutes** on a fresh VPS.
 
 ---
 
-## Step 7 — Open the Admin Dashboard
+## Step 7 — Log Into the Admin Dashboard
 
-Visit `https://yourdomain.com/admin` in your browser.
+Open `https://yourdomain.com/admin` in your browser.
 
-Log in with the `ADMIN_PASSWORD` you set in `.env`.
+Enter the `ADMIN_PASSWORD` from your `.env`.
 
 You will see:
-- **Stats grid** — total licenses, total scans, scans today/this month
-- **License table** — all issued keys with org, plan, usage, expiry
-- **Recent scans** — latest scan history across all customers
 
-The dashboard auto-refreshes every 60 seconds.
+- **Stats** — total licenses issued, scans today, scans this month, all-time scans
+- **Licenses** — table of every license key you have issued, with org name, plan, monthly usage, and expiry
+- **Recent Scans** — the last 50 scans across all customers, with finding counts and duration
+
+The dashboard refreshes every 60 seconds automatically.
 
 ---
 
-## Step 8 — Issue Your First License Key
+## Step 8 — Issue a License Key to Your Friend
 
-You can issue license keys from the admin dashboard or from the command line.
+You need to give your friend a license key before they can scan anything.
 
-### From the Admin Dashboard
+### Option A — From the Admin Dashboard (easiest)
 
-1. Open `https://yourdomain.com/admin`
+1. Go to `https://yourdomain.com/admin`
 2. Click **New License**
-3. Fill in: organization name, email, plan (`starter` / `pro` / `enterprise`), monthly scan limit, optional expiry date
-4. Click **Create** — the key appears immediately
-5. Copy it and send it to your customer
+3. Fill in their org name, email, choose a plan, set the monthly scan limit
+4. Click **Create**
+5. Copy the key that appears — it looks like `ciotx_a3f2b1c4d5e6f7...`
+6. Send it to them
 
-### From the Command Line (on the VPS)
+### Option B — From the VPS command line
 
 ```bash
+cd ~/ciotx
+
 docker compose exec api /ciotx-server license create \
-  --org "Acme Corp" \
-  --email security@acme.com \
+  --org "Your Friend's Company" \
+  --email friend@theircompany.com \
   --plan pro \
   --scans 500
 ```
@@ -232,300 +315,351 @@ docker compose exec api /ciotx-server license create \
 Output:
 ```
 License created successfully
-Key   : ciotx_a3f2b1c4d5e6f7...
-Org   : Acme Corp
-Email : security@acme.com
+Key   : ciotx_a3f2b1c4d5e6f7a8b9c0...
+Org   : Your Friend's Company
+Email : friend@theircompany.com
 Plan  : pro
 Scans : 500/month
 ```
 
-**Other license management commands:**
-
-```bash
-# List all licenses
-docker compose exec api /ciotx-server license list
-
-# Revoke a key
-docker compose exec api /ciotx-server license revoke ciotx_a3f2b1c4d5e6...
-
-# View per-license scan history
-docker compose exec api /ciotx-server license stats
-```
+Send them the key.
 
 ---
 
-## Step 9 — Test the Full Scan Flow
+## Step 9 — Install the GitHub App on Your Friend's Repo
 
-Install the CLI on your local machine:
+Go to your GitHub App's settings page:
+`https://github.com/settings/apps/YOUR-APP-NAME`
+
+Click **Install App** in the left sidebar.
+
+Click **Install** next to your friend's GitHub account or their organization.
+
+Choose **All repositories** or select specific repos.
+
+Click **Install**.
+
+That's it. The App is now watching every push to their repos.
+
+---
+
+## Step 10 — Your Friend's Laptop
+
+Send your friend these three things:
+1. Their license key (`ciotx_...`)
+2. The install command (or just the domain so they can get it themselves)
+3. The instructions below
+
+---
+
+### What Your Friend Does — Step by Step
+
+**They need:** their laptop (macOS, Linux, or Windows), their GitHub repo cloned locally, and the license key you sent them.
+
+---
+
+#### Install the ciotx CLI
+
+Open a terminal and run:
 
 ```bash
 curl -fsSL https://yourdomain.com/install.sh | sh
 ```
 
-Authenticate with the master key (or a license key you just created):
+This downloads the right binary for their OS and architecture and puts it in `/usr/local/bin/ciotx`. Takes about 5 seconds.
+
+Verify it worked:
+```bash
+ciotx --help
+```
+
+---
+
+#### Connect to Your ciotx Server
 
 ```bash
 ciotx auth login
-# Enter your license key when prompted
 ```
 
-Scan a codebase:
-
-```bash
-ciotx scan /path/to/your/project
+They will see:
+```
+Enter your license key: _
 ```
 
-After the scan completes (1–5 minutes for a typical codebase), ciotx generates two files in the current directory:
+They paste the key you sent them (`ciotx_a3f2b1...`) and press Enter.
 
-- `ciotx-report.html` — interactive report with filterable findings, severity badges, code evidence, and remediation guidance. Open it in a browser.
-- `ciotx-report.json` — machine-readable findings for CI/CD integration.
+```
+✓ License verified
+  Organization : Your Friend's Company
+  Plan         : pro
+  Scans used   : 0 / 500 this month
+  Status       : active
 
-Check your account status:
+Logged in. Run 'ciotx scan .' to scan your current directory.
+```
+
+The key is saved to `~/.ciotx/config.json` on their machine. They only need to do this once.
+
+---
+
+#### Scan Their Codebase
+
 ```bash
+cd /path/to/their/project
+ciotx scan .
+```
+
+They will see a progress indicator as the scan runs:
+
+```
+ciotx — Security Auditor
+  Version  : 1.0.0
+  Endpoint : https://api.yourdomain.com
+
+  Ingesting codebase...
+  ✓ 47 files  |  12,304 lines  |  6 chunks
+
+  Running analysis... (this takes 1–5 minutes)
+
+  ✓ Discovery complete
+  ✓ Verification complete  — 3 hallucinations dropped
+  ✓ Audit complete         — 1 false positive filtered
+
+  ─────────────────────────────────────────────────
+  Found 4 confirmed vulnerabilities
+  ─────────────────────────────────────────────────
+  Critical  2   ██████████
+  High      1   █████
+  Medium    1   █████
+  Low       0
+
+  Report saved:
+    ciotx-report.html
+    ciotx-report.json
+```
+
+They open `ciotx-report.html` in their browser. The report shows:
+- Every confirmed vulnerability with severity badge
+- Exact file name and line number
+- The vulnerable code highlighted
+- A description of how it can be exploited
+- Step-by-step remediation guidance
+- Filterable by severity, searchable by file name
+
+---
+
+#### The GitHub PR Part — What Happens Automatically
+
+As soon as your friend pushes any commit to their default branch (main/master):
+
+1. GitHub sends a push webhook to `https://yourdomain.com/webhooks/github`
+2. Your server enqueues a scan job
+3. A background worker fetches the full repo code via the GitHub API
+4. It runs the same discovery + verification + audit pipeline
+5. For every Critical and High severity finding, it generates a code fix
+6. It opens a pull request on their repo with the fix already written
+
+Their repo now has pull requests that look like:
+
+```
+PR: fix: CWE-89 SQL Injection — db/users.go:43
+ 
+Branch: ciotx/fix-cwe-89-a3f2b1c4
+
+ciotx detected a confirmed SQL Injection vulnerability:
+
+File: db/users.go
+Line: 43
+Evidence: db.Exec("SELECT * FROM users WHERE id = " + userID)
+
+This fix replaces string concatenation with a parameterized query,
+eliminating the injection vector.
+
+--- db/users.go
++++ db/users.go
+@@ -41,7 +41,7 @@
+ func GetUser(db *sql.DB, userID string) (*User, error) {
+-    row := db.QueryRow("SELECT * FROM users WHERE id = " + userID)
++    row := db.QueryRow("SELECT * FROM users WHERE id = $1", userID)
+     ...
+ }
+```
+
+Your friend reviews the PR, merges it, done.
+
+---
+
+#### Other Commands Your Friend Can Run
+
+```bash
+# Check account status and monthly usage
 ciotx status
-# Shows: plan, scans used this month, scans remaining
-```
 
-View scan history:
-```bash
+# See the last 10 scans with finding counts
 ciotx history
+
+# See the last 20 scans
 ciotx history --limit 20
+
+# Scan a specific directory
+ciotx scan /path/to/project
 ```
 
 ---
 
-## Step 10 — (Optional) Set Up GitHub App Integration
-
-This enables ciotx to automatically scan every push to your customers' repositories and open pull requests with security fixes. Skip this section if you don't need GitHub integration.
-
-### Create the GitHub App
-
-1. Go to [github.com/settings/apps/new](https://github.com/settings/apps/new)
-2. Fill in:
-   - **GitHub App name:** `ciotx-security` (or anything you like)
-   - **Homepage URL:** `https://yourdomain.com`
-   - **Webhook URL:** `https://yourdomain.com/webhooks/github`
-   - **Webhook secret:** generate one with `openssl rand -hex 32` — save it, you'll need it in a moment
-3. Under **Repository permissions**, set:
-   - **Contents:** Read & write (to commit fixes)
-   - **Pull requests:** Read & write (to open PRs)
-4. Under **Subscribe to events**, check:
-   - **Push**
-   - **Installation**
-5. Click **Create GitHub App**
-
-### Get the App Credentials
-
-After creating the app:
-1. Note the **App ID** shown at the top of the app settings page
-2. Scroll down to **Private keys** → **Generate a private key** — a `.pem` file downloads
-3. Base64-encode the private key:
-   ```bash
-   base64 -w 0 your-app-name.private-key.pem
-   ```
-   Copy the entire output (it will be a long single line).
-
-### Add Credentials to .env
-
-On your VPS, edit `.env`:
-```bash
-nano .env
-```
-
-Fill in the three GitHub variables:
-```bash
-GITHUB_APP_ID=123456
-GITHUB_APP_PRIVATE_KEY_BASE64=LS0tLS1CRUdJTi...  # the long base64 string
-GITHUB_WEBHOOK_SECRET=your_webhook_secret_from_step_1
-```
-
-### Redeploy
+## Managing Licenses
 
 ```bash
-docker compose up -d api
+# See all issued keys, their usage, and plan
+docker compose exec api /ciotx-server license list
+
+# Revoke a key immediately (blocks all further scans)
+docker compose exec api /ciotx-server license revoke ciotx_a3f2b1c4...
+
+# See per-license scan history
+docker compose exec api /ciotx-server license stats
 ```
-
-The scan workers start automatically when `GITHUB_APP_ID` is set.
-
-### Install the App on a Repository
-
-1. Go to your GitHub App's settings page → **Install App**
-2. Install it on the organization or specific repositories you want scanned
-3. Push a commit to the default branch of an installed repository
-4. ciotx detects the push via webhook, scans the code, and opens PRs for Critical and High findings within a few minutes
 
 ---
 
-## Useful Commands
-
-### View live logs
+## Useful Commands on the VPS
 
 ```bash
-# All services
+# Live logs from all containers
 docker compose logs -f
 
-# Just the API server
+# Live logs from just the API (see every scan, webhook, etc.)
 docker compose logs -f api
 
-# Just nginx (to see incoming requests)
-docker compose logs -f nginx
-```
-
-### Check service status
-
-```bash
+# Check if all containers are running
 docker compose ps
-```
 
-### Restart a specific service
-
-```bash
+# Restart just the API server (e.g. after changing .env)
 docker compose restart api
-docker compose restart nginx
-```
 
-### Stop and start everything
-
-```bash
+# Full stop
 docker compose down
+
+# Start everything again
 docker compose up -d
-```
-
-### Renew SSL certificate manually
-
-```bash
-docker compose run --rm certbot renew --force-renewal
-docker compose restart nginx
-```
-
-### Database access
-
-```bash
-docker compose exec postgres psql -U ciotx -d ciotx
 ```
 
 ---
 
 ## Updating ciotx
 
-When a new version is released:
-
 ```bash
-# On your VPS
+cd ~/ciotx
 git pull
 sudo ./scripts/deploy.sh
 ```
 
-The deploy script rebuilds images, restarts containers, and runs any new database migrations automatically. Existing license keys and scan history are preserved.
+The script rebuilds images and runs any new database migrations. Existing licenses, scan history, and data are preserved.
 
 ---
 
 ## Troubleshooting
 
-### Health check fails after deploy
+### "webhook not configured" error from GitHub
 
+Your `GITHUB_WEBHOOK_SECRET` in `.env` is empty or wrong. Fix:
 ```bash
-# See what the API server is saying
-docker compose logs api
-
-# Common causes:
-# - LLM_API_KEY is wrong or has no credits
-# - POSTGRES_PASSWORD mismatch
-# - Port 80/443 blocked by VPS firewall
+nano .env   # set GITHUB_WEBHOOK_SECRET to what you entered in the GitHub App form
+docker compose restart api
 ```
 
-### Port 80 or 443 is blocked
+### Scan workers not starting / no PRs opening
 
-Most VPS providers ship with a firewall. Open the ports:
+Check that `GITHUB_APP_ID` is set:
+```bash
+docker compose logs api | grep -i github
+# Should show: "github scan workers started count=2"
+# If it shows: "GITHUB_APP_ID not set" — edit .env and restart
+```
+
+### GitHub App says "delivery failed"
+
+Check if your server is reachable:
+```bash
+curl -s https://yourdomain.com/health
+# Should return: {"status":"ok","service":"ciotx"}
+```
+
+If it doesn't respond, check `docker compose ps` and `docker compose logs nginx`.
+
+### Health check fails during deploy
 
 ```bash
-# UFW (Ubuntu default)
-ufw allow 80/tcp
-ufw allow 443/tcp
-ufw allow 22/tcp
-ufw enable
-
-# Or with iptables
-iptables -A INPUT -p tcp --dport 80 -j ACCEPT
-iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+docker compose logs api
+# Common causes:
+# - LLM_API_KEY wrong → "missing required environment variable"
+# - Port 80/443 blocked → check firewall (Step 2)
+# - DNS not propagated → check 'dig +short yourdomain.com'
 ```
 
 ### SSL certificate fails
 
-Confirm DNS is correct first:
 ```bash
-dig +short yourdomain.com
-# Must show your VPS IP
+# Check DNS first
+dig +short yourdomain.com   # must return your VPS IP
+
+# Let's Encrypt rate-limits to 5 certificates per domain per week.
+# If you hit the limit, wait 1 week, or use a different subdomain.
 ```
 
-Let's Encrypt has a rate limit of 5 certificate requests per domain per week. If you hit it, wait and try again. Use the staging environment to test:
-```bash
-# Edit scripts/deploy.sh, add --staging to the certbot certonly command
-# Then request again (staging certs are not trusted by browsers but won't count against the rate limit)
-```
+### Stuck scan jobs (no PRs after pushes)
 
-### Admin panel shows 503
-
-`ADMIN_PASSWORD` is not set or the api container hasn't started yet. Check:
-```bash
-docker compose ps api
-docker compose logs api | grep ADMIN
-```
-
-### GitHub webhooks show "webhook not configured"
-
-`GITHUB_WEBHOOK_SECRET` is not set or is empty in your `.env`. After adding it:
-```bash
-docker compose up -d api
-```
-
-### Scan jobs are stuck
-
-If jobs are stuck in `running` state after a server restart (visible as no PR activity despite pushes), restart the api container:
 ```bash
 docker compose restart api
-```
-
-On startup, the worker pool automatically resets stuck jobs and retries them.
-
----
-
-## Architecture at a Glance
-
-```
-User Machine                    Your VPS (Docker)
-────────────                    ──────────────────────────────────────
-ciotx CLI          ──HTTPS──▶  nginx (TLS termination)
-  │                                │
-  │ ciotx scan .                   │  /v1/scan, /v1/status, /v1/history
-  │ ciotx auth login               │  /admin,  /webhooks/github
-  │ ciotx status                   ▼
-  │                            Go API server
-  │                              │        │
-  │                              │        ▼
-  │                         PostgreSQL   DeepSeek API
-  │                         (licenses,   (internal — never
-  │                          scan jobs,   visible to users)
-  │                          history)
-  │
-  └──▶ Opens ciotx-report.html in browser
-
-GitHub Repo ──push event──▶ /webhooks/github
-                                │
-                                ▼
-                            Scan worker (background)
-                            Fetches code via GitHub API
-                            Runs discovery + audit
-                            Opens fix PRs automatically
+# The worker pool auto-resets any stuck jobs on startup
 ```
 
 ---
 
-## Security Notes
+## Architecture
 
-- The DeepSeek API key is stored only inside the Docker container. It is never logged, never returned in API responses, and never visible to your users or their code.
-- Users authenticate with license keys (`ciotx_...`). These are stored hashed in PostgreSQL and never returned in plaintext after creation.
-- The admin panel is protected by a session cookie with HMAC-SHA256 signature. Sessions expire after 8 hours and are invalidated by server restart.
-- Rate limiting is enforced at the nginx layer (10 requests/minute for scan endpoints, 60 requests/minute for admin) and in the Go application (per-key concurrency limit of 2 concurrent scans).
-- PostgreSQL is not exposed to the host network — it is only reachable from other containers on the internal Docker bridge network.
-- All containers run as non-root users.
+```
+Your Friend's Machine            Your VPS (Docker Compose)
+─────────────────────            ─────────────────────────────────────
+ciotx CLI
+ │
+ │  ciotx auth login             ┌─ nginx (TLS, rate limiting) ─────┐
+ │  ciotx scan .      ──HTTPS──▶ │                                   │
+ │                               │  /v1/scan      → Go API server    │
+ │                               │  /v1/status    → Go API server    │
+ │  ciotx-report.html            │  /admin        → Go API server    │
+ └─ opens in browser             │  /install.sh   → served static    │
+                                 │  /releases/    → CLI binaries     │
+                                 └───────────────────────────────────┘
+                                           │
+                                           ├── PostgreSQL
+                                           │   licenses, scan history,
+                                           │   scan_jobs queue
+                                           │
+                                           └── DeepSeek API (internal)
+                                               discovery + audit models
+                                               never visible to users
+
+Their GitHub Repo
+ │
+ │  git push main    ──webhook──▶ /webhooks/github
+ │                                       │
+ │                               Background worker
+ │                               1. Fetches repo via GitHub API
+ │                               2. Runs discovery + audit
+ │                               3. Generates code fixes
+ │                               4. Opens PRs on their repo  ──▶ PR created ✓
+ │
+ └── Merges the fix PR
+```
+
+---
+
+## Security
+
+- **Your AI key is invisible to users.** DeepSeek's API key is a constant inside the Docker container. It never appears in logs, responses, or error messages.
+- **Users only see your domain.** The CLI bakes in `https://yourdomain.com` at compile time. There is no way for users to change the endpoint.
+- **License keys are one-way.** Keys are stored in PostgreSQL and validated server-side. You revoke a key in one command and it stops working immediately.
+- **Admin sessions expire in 8 hours** and are signed with a random HMAC key that changes on every server restart.
+- **PostgreSQL is internal only.** The database port is never exposed outside the Docker network.
+- **Rate limiting is in nginx.** 10 scan requests per minute per IP, 60 admin requests per minute per IP. DoS from any single IP is bounded.

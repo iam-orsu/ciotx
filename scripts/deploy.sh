@@ -61,10 +61,10 @@ set -a
 source <(grep -v '^#' .env | grep -v '^$')
 set +a
 
-REQUIRED_VARS=(DOMAIN_NAME VPS_SERVER_IP SSL_EMAIL LLM_API_KEY MASTER_LICENSE_KEY POSTGRES_PASSWORD)
+REQUIRED_VARS=(DOMAIN_NAME VPS_SERVER_IP SSL_EMAIL LLM_API_KEY MASTER_LICENSE_KEY POSTGRES_PASSWORD GITHUB_APP_ID GITHUB_APP_PRIVATE_KEY_BASE64 GITHUB_WEBHOOK_SECRET)
 for var in "${REQUIRED_VARS[@]}"; do
     val="${!var:-}"
-    [[ -z "$val" ]] && error "$var is not set in .env"
+    [[ -z "$val" ]] && error "$var is not set in .env\n  See DEPLOY.md for how to create and configure the GitHub App."
     echo "$val" | grep -qiE "your-|change-me|example|1\.2\.3\.4|you@" \
         && error "$var still has its placeholder value — fill it in."
 done
@@ -86,6 +86,9 @@ fi
 
 [[ ${#POSTGRES_PASSWORD} -lt 16 ]] \
     && warn "POSTGRES_PASSWORD is very short — use at least 32 random chars in production."
+
+[[ ${#GITHUB_WEBHOOK_SECRET} -lt 16 ]] \
+    && warn "GITHUB_WEBHOOK_SECRET is very short — generate one with: openssl rand -hex 32"
 
 success "Configuration validated:"
 info "  Domain : ${DOMAIN_NAME}"
