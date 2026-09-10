@@ -25,6 +25,7 @@ import (
 	"github.com/iam-orsu/ciotx/server/admin"
 	"github.com/iam-orsu/ciotx/server/handlers"
 	"github.com/iam-orsu/ciotx/server/internal/db"
+	"github.com/iam-orsu/ciotx/server/worker"
 )
 
 // adminLicensesRouter dispatches GET and POST on /admin/api/licenses.
@@ -83,6 +84,19 @@ func main() {
 		}
 	}
 
+	// ── GitHub scan workers (Phase 6) ────────────────────────────────
+	// Workers process async scan_jobs enqueued by the /webhooks/github handler.
+	// They run as background goroutines and stop when the server shuts down.
+	// Only started when the GitHub App is configured (GITHUB_APP_ID set).
+	if os.Getenv("GITHUB_APP_ID") != "" {
+		workerCtx, workerCancel := context.WithCancel(context.Background())
+		defer workerCancel()
+		worker.Start(workerCtx, 2)
+		slog.Info("github scan workers started", "count", 2)
+	} else {
+		slog.Info("GITHUB_APP_ID not set — GitHub PR integration disabled")
+	}
+
 	// ── Routes ───────────────────────────────────────────────────────
 	mux := http.NewServeMux()
 
@@ -105,6 +119,10 @@ func main() {
 	mux.HandleFunc("/v1/history",
 		handlers.RecoveryMiddleware(handlers.AuthMiddleware(handlers.HistoryHandler)),
 	)
+
+	// ── GitHub Webhook (Phase 6) ─────────────────────────────────────
+	// HMAC-verified endpoint — GitHub sends push/installation events here.
+	mux.HandleFunc("/webhooks/github", handlers.RecoveryMiddleware(handlers.WebhookHandler))
 
 	// ── Admin Web UI (Phase 4) ────────────────────────────────────────
 	// The admin panel is only active when ADMIN_PASSWORD is set.
