@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/iam-orsu/ciotx/server/internal/db"
 )
@@ -174,8 +177,13 @@ func isAdminAuthenticated(r *http.Request) bool {
 	return verifyToken(cookie.Value)
 }
 
-// remoteIP extracts the client IP, respecting X-Forwarded-For only for
-// loopback/private upstreams (i.e. our own Nginx reverse proxy).
+// remoteIP extracts the real client IP.
+// When the immediate caller is our own Nginx (loopback or private), we use
+// X-Real-IP, which Nginx sets to $remote_addr (the IP it actually sees —
+// not modifiable by the client). This prevents an attacker from bypassing
+// the login rate-limiter by cycling fake X-Forwarded-For values.
+// X-Forwarded-For parts[0] is NOT used because $proxy_add_x_forwarded_for
+// appends the real IP but clients can prepend arbitrary spoofed values.
 func remoteIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -183,10 +191,15 @@ func remoteIP(r *http.Request) string {
 	}
 	ip := net.ParseIP(host)
 	if ip != nil && (ip.IsLoopback() || ip.IsPrivate()) {
+		// X-Real-IP is set by Nginx to $remote_addr — canonical, non-spoofable.
+		if xrip := strings.TrimSpace(r.Header.Get("X-Real-IP")); xrip != "" {
+			return xrip
+		}
+		// Fallback: last segment of XFF is also added by Nginx (real client IP).
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			parts := strings.Split(xff, ",")
-			if candidate := strings.TrimSpace(parts[0]); candidate != "" {
-				return candidate
+			if last := strings.TrimSpace(parts[len(parts)-1]); last != "" {
+				return last
 			}
 		}
 	}
@@ -404,6 +417,10 @@ func AdminRevokeLicenseHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := db.RevokeLicense(r.Context(), key); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "license key not found")
+			return
+		}
 		slog.Error("admin revoke license failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to revoke license")
 		return

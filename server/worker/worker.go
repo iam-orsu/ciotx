@@ -190,7 +190,7 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 			continue
 		}
 
-		prURL, err := createFixPR(ctx, log, token, owner, repo,
+		prURL, err := createFixPR(ctx, log, llmClient, token, owner, repo,
 			job.DefaultBranch, baseSHA, finding, fileContent)
 		if err != nil {
 			log.Warn("fix PR failed", "finding", finding.CWE, "file", finding.File, "error", err)
@@ -204,15 +204,16 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 }
 
 // createFixPR generates a fix with the LLM and opens a GitHub PR for one finding.
+// llmClient is passed in from the caller to avoid allocating a new HTTP client per PR.
 func createFixPR(
 	ctx context.Context,
 	log *slog.Logger,
+	llmClient *llm.Client,
 	token, owner, repo, defaultBranch, baseSHA string,
 	finding *types.Finding,
 	fileContent string,
 ) (string, error) {
 	// Generate fix.
-	llmClient := llm.NewClient()
 	fix, err := llm.RunFix(ctx, llmClient, finding, fileContent)
 	if err != nil {
 		return "", fmt.Errorf("fix generation: %w", err)

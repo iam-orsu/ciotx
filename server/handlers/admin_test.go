@@ -462,10 +462,36 @@ func TestAdminUIHandler_ServesHTML(t *testing.T) {
 func TestRemoteIP_FromLoopback(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("X-Forwarded-For", "203.0.113.5")
+	// Nginx sets X-Real-IP to $remote_addr (the real client IP).
+	req.Header.Set("X-Real-IP", "203.0.113.5")
 	ip := remoteIP(req)
 	if ip != "203.0.113.5" {
-		t.Fatalf("want client IP from XFF, got %q", ip)
+		t.Fatalf("want client IP from X-Real-IP, got %q", ip)
+	}
+}
+
+func TestRemoteIP_XFFSpoofPrevented(t *testing.T) {
+	// Attacker sends spoofed X-Forwarded-For to bypass rate limiting.
+	// With $proxy_add_x_forwarded_for, Nginx appends the real client IP.
+	// The handler should use X-Real-IP (non-spoofable) and ignore the first XFF segment.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.0.0.1:1234" // private — looks like Nginx
+	req.Header.Set("X-Real-IP", "203.0.113.5")
+	req.Header.Set("X-Forwarded-For", "1.1.1.1, 203.0.113.5") // 1.1.1.1 is spoofed
+	ip := remoteIP(req)
+	if ip != "203.0.113.5" {
+		t.Fatalf("want X-Real-IP (203.0.113.5), got %q — XFF parts[0] must not be trusted", ip)
+	}
+}
+
+func TestRemoteIP_XFFLastSegmentFallback(t *testing.T) {
+	// No X-Real-IP but XFF is present — fall back to last segment (Nginx-appended).
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.0.0.1:1234"
+	req.Header.Set("X-Forwarded-For", "spoofed.ip, 203.0.113.5")
+	ip := remoteIP(req)
+	if ip != "203.0.113.5" {
+		t.Fatalf("want last XFF segment, got %q", ip)
 	}
 }
 

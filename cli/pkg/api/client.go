@@ -217,6 +217,9 @@ func (c *Client) History(limit int) (*HistoryResponse, error) {
 
 // VerifyLicense checks if the provided license key is valid against the ciotx backend.
 func (c *Client) VerifyLicense(key string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
 	type verifyReq struct {
 		LicenseKey string `json:"license_key"`
 	}
@@ -226,7 +229,7 @@ func (c *Client) VerifyLicense(key string) error {
 	}
 
 	url := c.endpoint + "/v1/auth/verify"
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("cannot create verification request: %w", err)
 	}
