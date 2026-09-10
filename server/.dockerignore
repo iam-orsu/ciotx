@@ -1,0 +1,9 @@
+# Exclude test files and development artifacts from the Docker build context.
+# The multi-stage build only uses Go source, so this is for build speed and security.
+*_test.go
+**/*_test.go
+testdata/
+.git/
+.gitignore
+*.md
+Dockerfile

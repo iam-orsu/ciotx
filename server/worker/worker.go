@@ -38,6 +38,18 @@ func Start(ctx context.Context, n int) {
 	if n < 1 {
 		n = 2
 	}
+
+	// Recover jobs stuck in 'running' from a previous server crash (OOM-kill, SIGKILL,
+	// power cycle). Those jobs will never be claimed again because workers only query
+	// for 'pending'. Reset them so they are retried by this worker pool.
+	resetCtx, resetCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer resetCancel()
+	if count, err := db.ResetStuckJobs(resetCtx, scanTimeout); err != nil {
+		slog.Warn("failed to reset stuck scan jobs", "error", err)
+	} else if count > 0 {
+		slog.Info("reset stuck scan jobs for retry", "count", count)
+	}
+
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
 		wg.Add(1)
@@ -52,11 +64,15 @@ func Start(ctx context.Context, n int) {
 func runWorker(ctx context.Context, id int) {
 	slog.Info("scan worker started", "worker", id)
 	for {
+		// Use NewTimer + explicit Stop so the timer goroutine is cleaned up immediately
+		// when the context is cancelled, rather than leaking until pollInterval expires.
+		t := time.NewTimer(pollInterval)
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			slog.Info("scan worker stopping", "worker", id)
 			return
-		case <-time.After(pollInterval):
+		case <-t.C:
 			processOneJob(ctx, id)
 		}
 	}

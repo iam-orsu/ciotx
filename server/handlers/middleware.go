@@ -10,6 +10,18 @@ import (
 	"time"
 )
 
+// responseWriter wraps http.ResponseWriter to capture the HTTP status code
+// so it can be included in the access log after the handler returns.
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
 // RecoveryMiddleware catches any panic in a handler, logs the stack trace
 // server-side, and returns a generic 500 to the client.
 // This prevents a nil pointer or any other panic from crashing the server process.
@@ -18,8 +30,10 @@ func RecoveryMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		reqID := newRequestID()
 		start := time.Now()
 
+		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+
 		// Attach request ID to the response so ops can correlate with server logs
-		w.Header().Set("X-Request-ID", reqID)
+		rw.Header().Set("X-Request-ID", reqID)
 
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -28,17 +42,18 @@ func RecoveryMiddleware(next http.HandlerFunc) http.HandlerFunc {
 					"panic", rec,
 					"stack", string(debug.Stack()),
 				)
-				writeError(w, http.StatusInternalServerError, "internal server error")
+				writeError(rw, http.StatusInternalServerError, "internal server error")
 			}
 			slog.Info("request",
 				"method", r.Method,
 				"path", r.URL.Path,
+				"status", rw.status,
 				"duration_ms", time.Since(start).Milliseconds(),
 				"req", reqID,
 			)
 		}()
 
-		next(w, r)
+		next(rw, r)
 	}
 }
 

@@ -50,7 +50,18 @@ server {
     proxy_hide_header Server;
 
     # ── DNS Resolver (Docker internal — resolves 'api' container name)
+    # 127.0.0.11 is Docker's embedded DNS server, always present in Docker networks.
+    # valid=10s means nginx re-resolves 'api' every 10 seconds so that if the api
+    # container restarts and gets a new IP, nginx picks it up automatically.
+    # IMPORTANT: the resolver directive only applies when the upstream is a variable
+    # (not a literal). We use $api_upstream below to force dynamic re-resolution.
     resolver 127.0.0.11 valid=10s ipv6=off;
+
+    # Variable forces nginx to resolve 'api' via Docker DNS on every request
+    # (subject to the resolver's valid=10s TTL cache). Without a variable, nginx
+    # resolves the hostname once at startup and caches it forever — if the api
+    # container restarts with a new IP, nginx would serve 502 errors until restarted.
+    set $api_upstream api:8080;
 
     # ── Request Size Limit ──────────────────────────────────────────
     # Large codebases produce large chunk payloads. Set a generous limit.
@@ -78,7 +89,7 @@ server {
     location /v1/ {
         limit_req zone=api burst=10 nodelay;
 
-        proxy_pass         http://api:8080;
+        proxy_pass         http://$api_upstream;
         proxy_http_version 1.1;
         proxy_set_header   Host              $host;
         proxy_set_header   X-Real-IP         $remote_addr;
@@ -99,7 +110,7 @@ server {
     # ── GitHub Webhook ──────────────────────────────────────────────
     # No rate limit here — GitHub delivers at its own pace, HMAC is the auth.
     location = /webhooks/github {
-        proxy_pass         http://api:8080;
+        proxy_pass         http://$api_upstream;
         proxy_http_version 1.1;
         proxy_set_header   Host              $host;
         proxy_set_header   X-Real-IP         $remote_addr;
@@ -116,7 +127,7 @@ server {
     location /admin {
         limit_req zone=api_admin burst=30 nodelay;
 
-        proxy_pass         http://api:8080;
+        proxy_pass         http://$api_upstream;
         proxy_http_version 1.1;
         proxy_set_header   Host              $host;
         proxy_set_header   X-Real-IP         $remote_addr;
@@ -131,7 +142,7 @@ server {
 
     # ── Health Check (nginx → api, no rate limit, no logging) ──────
     location = /health {
-        proxy_pass         http://api:8080/health;
+        proxy_pass         http://$api_upstream/health;
         proxy_http_version 1.1;
         proxy_read_timeout 5s;
         access_log         off;

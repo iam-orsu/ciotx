@@ -71,6 +71,8 @@ type ScanJob struct {
 }
 
 // EnqueueScanJob inserts a new pending scan job.
+// ON CONFLICT DO NOTHING prevents duplicate jobs from GitHub webhook redeliveries
+// (GitHub retries when it doesn't receive a response within 10 seconds).
 func EnqueueScanJob(ctx context.Context, installationID int64, repoFullName, defaultBranch, headSHA string) error {
 	if !IsAvailable() {
 		return fmt.Errorf("database unavailable")
@@ -78,8 +80,30 @@ func EnqueueScanJob(ctx context.Context, installationID int64, repoFullName, def
 	_, err := Pool().Exec(ctx, `
 		INSERT INTO scan_jobs (installation_id, repo_full_name, default_branch, head_sha)
 		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (repo_full_name, head_sha) DO NOTHING
 	`, installationID, repoFullName, defaultBranch, headSHA)
 	return err
+}
+
+// ResetStuckJobs resets scan jobs that have been in 'running' state for longer
+// than olderThan. This recovers jobs orphaned when the server was killed mid-scan
+// (OOM-kill, SIGKILL, power cycle) — they would otherwise stay stuck forever
+// because workers only claim 'pending' jobs.
+// Returns the number of jobs reset.
+func ResetStuckJobs(ctx context.Context, olderThan time.Duration) (int64, error) {
+	if !IsAvailable() {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-olderThan)
+	tag, err := Pool().Exec(ctx, `
+		UPDATE scan_jobs
+		SET status = 'pending', claimed_at = NULL, updated_at = NOW()
+		WHERE status = 'running' AND claimed_at < $1
+	`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // ClaimNextJob atomically claims one pending job for the calling worker.
