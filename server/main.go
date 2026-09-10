@@ -27,6 +27,18 @@ import (
 	"github.com/iam-orsu/ciotx/server/internal/db"
 )
 
+// adminLicensesRouter dispatches GET and POST on /admin/api/licenses.
+func adminLicensesRouter(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		handlers.AdminListLicensesHandler(w, r)
+	case http.MethodPost:
+		handlers.AdminCreateLicenseHandler(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func main() {
 	// ── Admin CLI dispatch ────────────────────────────────────────────
 	// If the first argument is a known admin subcommand, run it and exit.
@@ -93,6 +105,22 @@ func main() {
 	mux.HandleFunc("/v1/history",
 		handlers.RecoveryMiddleware(handlers.AuthMiddleware(handlers.HistoryHandler)),
 	)
+
+	// ── Admin Web UI (Phase 4) ────────────────────────────────────────
+	// The admin panel is only active when ADMIN_PASSWORD is set.
+	// Login/logout are unprotected (they establish the session).
+	// All /admin/api/* routes require a valid HMAC session cookie.
+	mux.HandleFunc("/admin", handlers.RecoveryMiddleware(handlers.AdminUIHandler))
+	mux.HandleFunc("/admin/login", handlers.RecoveryMiddleware(handlers.AdminLoginHandler))
+	mux.HandleFunc("/admin/logout", handlers.RecoveryMiddleware(handlers.AdminLogoutHandler))
+	mux.HandleFunc("/admin/api/stats",
+		handlers.RecoveryMiddleware(handlers.AdminAuthMiddleware(handlers.AdminStatsHandler)))
+	mux.HandleFunc("/admin/api/licenses",
+		handlers.RecoveryMiddleware(handlers.AdminAuthMiddleware(adminLicensesRouter)))
+	mux.HandleFunc("/admin/api/licenses/",
+		handlers.RecoveryMiddleware(handlers.AdminAuthMiddleware(handlers.AdminRevokeLicenseHandler)))
+	mux.HandleFunc("/admin/api/scans",
+		handlers.RecoveryMiddleware(handlers.AdminAuthMiddleware(handlers.AdminScansHandler)))
 
 	// ── HTTP Server ───────────────────────────────────────────────────
 	srv := &http.Server{
