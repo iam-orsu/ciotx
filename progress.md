@@ -487,6 +487,59 @@ After these two fixes, all Phase 1, 2, and 3 code is clean. No further issues fo
 
 ---
 
+## 6.3. External QA Audit Fixes (v3.1.0) — COMPLETED
+
+An external QA auditor reviewed the codebase and surfaced five findings. Three were valid; fixes applied.
+
+### Auditor Findings & Resolution
+
+| # | Finding | Valid? | Resolution |
+|:--|:--------|:------:|:-----------|
+| 1 | Thin LLM pipeline test coverage | ✅ Valid | Fixed — see below |
+| 2 | No structured logging | ✅ Valid | Fixed — see below |
+| 3 | `json.Encode` error silently dropped | ✅ Valid (minor) | Fixed — see below |
+| 4 | X-Request-ID never returned to client | ❌ Wrong | Already set: `w.Header().Set("X-Request-ID", reqID)` in middleware.go |
+| 5 | Master key requires full redeploy to rotate | ⚠️ Overstated | Key is `os.Getenv(...)` — rotation is a container restart, not a redeploy |
+
+### Fixes Applied
+
+#### A. LLM Pipeline Test Coverage (`server/internal/llm/run_test.go` — NEW)
+- **Problem**: `RunDiscovery`, `RunAudit`, and `Chat` retry logic had zero test coverage. These are the highest-risk paths (network calls, LLM parsing, exponential backoff).
+- **Fix**: Added `run_test.go` with 10 new tests using `net/http/httptest` to mock the LLM provider:
+  - `TestRunDiscovery_Success` — happy path, verifies findings parsed and usage tracked
+  - `TestRunDiscovery_EmptyFindings` — handles empty findings response
+  - `TestRunDiscovery_BackendError` — propagates backend 500 as error
+  - `TestRunAudit_EmptyInput` — returns immediately without hitting network
+  - `TestRunAudit_ConfirmedAndRejected` — CONFIRMED passes through, REJECTED does not
+  - `TestRunAudit_RefinedSeverity` — REFINED verdict downgrades severity correctly
+  - `TestRunAudit_ChatError_PassThrough` — audit LLM failure is non-fatal; all findings pass through
+  - `TestChat_SuccessFirstAttempt` — basic happy path
+  - `TestChat_RetriesOnFailureThenSucceeds` — verifies exactly 3 calls (2 fails + 1 success)
+  - `TestChat_ContextCancellationStopsRetries` — cancellation stops before all 5 retries complete
+  - `TestChat_ExhaustsAllRetries` — returns error when all attempts fail
+- **Infrastructure**: Added `retryDelay time.Duration` field to `Client` (zero = default 5s production behavior) so tests use 1ms delays and complete in milliseconds.
+
+#### B. Structured Logging (`server/`)
+- **Problem**: `fmt.Printf("[server] ...")` scattered throughout — no log levels, no structured fields, not parseable by log aggregators (Datadog, Loki, CloudWatch).
+- **Fix**: Migrated all server-side log output to Go 1.21 `log/slog`. JSON handler configured in `main.go` before any other work. Files updated:
+  - `server/main.go` — startup validation, DB warnings, listen/shutdown messages
+  - `server/handlers/middleware.go` — panic recovery, access log (now structured with `duration_ms`)
+  - `server/handlers/auth.go` — DB lookup errors
+  - `server/handlers/scan.go` — chunk progress, verification/audit counts, post-scan accounting warnings
+  - `server/internal/db/db.go` — PostgreSQL connect confirmation
+  - `server/internal/db/migrate.go` — migration applied messages
+- Admin CLI (`server/admin/license.go`) retains `fmt.Print/Fprintf` — it's a terminal tool, not a daemon.
+
+#### C. `json.Encode` Error Logged (`server/handlers/scan.go`)
+- **Problem**: `json.NewEncoder(w).Encode(v)` silently dropped its error in both `writeJSON` and `writeError`. A dropped connection mid-response went unobserved.
+- **Fix**: Both helpers now log at `slog.Error` level on encode failure. The HTTP status cannot be changed after `WriteHeader`, but the error is now visible in logs.
+
+### Verification
+- `go build ./...` — clean
+- `go test ./... -timeout 60s` — all tests pass (LLM package now runs 18 tests total)
+
+---
+
 ## 7. Phase 4 & Beyond: Future Architecture
 
 ### Phase 4: Operator Admin Web Control Plane

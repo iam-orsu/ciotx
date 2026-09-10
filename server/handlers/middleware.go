@@ -4,7 +4,7 @@ package handlers
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
+	"log/slog"
 	"net/http"
 	"runtime/debug"
 	"time"
@@ -23,15 +23,18 @@ func RecoveryMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		defer func() {
 			if rec := recover(); rec != nil {
-				// Log full stack trace server-side only — never expose to client
-				fmt.Printf("[ciotx-server] PANIC [req=%s] %v\n%s\n", reqID, rec, debug.Stack())
+				slog.Error("panic recovered",
+					"req", reqID,
+					"panic", rec,
+					"stack", string(debug.Stack()),
+				)
 				writeError(w, http.StatusInternalServerError, "internal server error")
 			}
-			// Access log inside defer so it always runs, even on panic.
-			fmt.Printf("[ciotx-server] %s %s %s [req=%s]\n",
-				r.Method, r.URL.Path,
-				time.Since(start).Round(time.Millisecond),
-				reqID,
+			slog.Info("request",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"duration_ms", time.Since(start).Milliseconds(),
+				"req", reqID,
 			)
 		}()
 

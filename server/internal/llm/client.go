@@ -91,8 +91,9 @@ func CostUSD(u Usage, model string) float64 {
 // Client is the internal LLM provider client.
 // Its existence and configuration are invisible to ciotx end users.
 type Client struct {
-	apiKey     string
-	httpClient *http.Client
+	apiKey      string
+	httpClient  *http.Client
+	retryDelay  time.Duration // base retry delay; 0 = default 5s (overridable in tests)
 }
 
 // NewClient creates a new internal LLM client using the server's API key from env.
@@ -145,9 +146,13 @@ func (c *Client) Chat(ctx context.Context, model string, messages []message, jso
 			return "", Usage{}, ctx.Err()
 		}
 
-		// Exponential backoff: 5s, 10s, 20s, 40s
+		// Exponential backoff: base, 2×base, 4×base, 8×base (default base = 5s)
 		if attempt < maxRetries-1 {
-			wait := time.Duration(5*(1<<attempt)) * time.Second
+			base := c.retryDelay
+			if base == 0 {
+				base = 5 * time.Second
+			}
+			wait := time.Duration(1<<attempt) * base
 			select {
 			case <-time.After(wait):
 			case <-ctx.Done():

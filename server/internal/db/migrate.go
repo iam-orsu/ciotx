@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 )
@@ -77,7 +78,7 @@ func RunMigrations(ctx context.Context) error {
 			return fmt.Errorf("commit migration %s: %w", version, err)
 		}
 
-		fmt.Printf("[db] migration applied: %s\n", version)
+		slog.Info("migration applied", "version", version)
 	}
 
 	return nil

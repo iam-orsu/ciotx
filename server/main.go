@@ -15,7 +15,7 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -36,13 +36,19 @@ func main() {
 		return
 	}
 
+	// ── Structured logging ────────────────────────────────────────────
+	// JSON lines to stdout — pipe-friendly and parseable by log aggregators.
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})))
+
 	// ── Startup validation ────────────────────────────────────────────
 	if os.Getenv("LLM_API_KEY") == "" {
-		fmt.Fprintln(os.Stderr, "[ciotx-server] FATAL: LLM_API_KEY environment variable is not set")
+		slog.Error("missing required environment variable", "var", "LLM_API_KEY")
 		os.Exit(1)
 	}
 	if os.Getenv("MASTER_LICENSE_KEY") == "" {
-		fmt.Fprintln(os.Stderr, "[ciotx-server] FATAL: MASTER_LICENSE_KEY environment variable is not set")
+		slog.Error("missing required environment variable", "var", "MASTER_LICENSE_KEY")
 		os.Exit(1)
 	}
 
@@ -56,12 +62,11 @@ func main() {
 	defer startCancel()
 
 	if err := db.Init(startCtx); err != nil {
-		// DB is required in Phase 2 — but we log a warning and continue so that
-		// the master key fallback still works during local dev without Postgres.
-		fmt.Printf("[ciotx-server] WARNING: database unavailable (%v) — DB-backed licenses will not work\n", err)
+		// Non-fatal: master key fallback still works without Postgres.
+		slog.Warn("database unavailable — DB-backed licenses will not work", "error", err)
 	} else {
 		if err := db.RunMigrations(startCtx); err != nil {
-			fmt.Fprintf(os.Stderr, "[ciotx-server] FATAL: migration failed: %v\n", err)
+			slog.Error("migration failed", "error", err)
 			os.Exit(1)
 		}
 	}
@@ -104,23 +109,23 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		fmt.Printf("[ciotx-server] Listening on :%s\n", port)
+		slog.Info("listening", "port", port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Fprintf(os.Stderr, "[ciotx-server] Fatal: %v\n", err)
+			slog.Error("server error", "error", err)
 			os.Exit(1)
 		}
 	}()
 
 	sig := <-quit
-	fmt.Printf("[ciotx-server] Received %s — shutting down gracefully...\n", sig)
+	slog.Info("shutting down gracefully", "signal", sig.String())
 
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer shutCancel()
 
 	if err := srv.Shutdown(shutCtx); err != nil {
-		fmt.Fprintf(os.Stderr, "[ciotx-server] Forced shutdown: %v\n", err)
+		slog.Error("forced shutdown", "error", err)
 	}
 
 	db.Close()
-	fmt.Println("[ciotx-server] Stopped.")
+	slog.Info("stopped")
 }

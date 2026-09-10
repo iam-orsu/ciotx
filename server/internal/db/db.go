@@ -5,6 +5,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
@@ -40,7 +41,7 @@ func Init(ctx context.Context) error {
 	}
 
 	pool = p
-	fmt.Println("[db] connected to PostgreSQL")
+	slog.Info("connected to PostgreSQL")
 	return nil
 }
 

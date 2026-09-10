@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -115,22 +116,21 @@ func ScanHandler(w http.ResponseWriter, r *http.Request) {
 	for _, chunk := range req.Chunks {
 		findings, err := llm.RunDiscovery(scanCtx, client, chunk.ChunkID, chunk.Payload, discoveryUsage, &usageMu)
 		if err != nil {
-			// Log server-side only — never expose internal errors to users
-			fmt.Printf("[server] chunk #%d error: %v\n", chunk.ChunkID, err)
+			slog.Error("chunk discovery error", "chunk", chunk.ChunkID, "error", err)
 			continue
 		}
 		candidateFindings = append(candidateFindings, findings...)
-		fmt.Printf("[server] chunk #%d: %d candidates\n", chunk.ChunkID, len(findings))
+		slog.Info("chunk processed", "chunk", chunk.ChunkID, "candidates", len(findings))
 	}
 
 	// ── Phase 2: Evidence re-anchoring — drop hallucinations
 	filesContent := extractFilesContent(req.Chunks)
 	verified, dropped := verifyFindings(candidateFindings, filesContent)
-	fmt.Printf("[server] verified: %d (%d hallucinations dropped)\n", len(verified), dropped)
+	slog.Info("verification complete", "verified", len(verified), "hallucinations_dropped", dropped)
 
 	// ── Phase 3: Adversarial audit — filter false positives
 	final, rejected, _ := llm.RunAudit(scanCtx, client, verified, filesContent, auditUsage, &usageMu)
-	fmt.Printf("[server] final: %d (%d false positives filtered)\n", len(final), rejected)
+	slog.Info("audit complete", "final", len(final), "false_positives_filtered", rejected)
 
 	if final == nil {
 		final = []*types.Finding{}
@@ -173,11 +173,11 @@ func ScanHandler(w http.ResponseWriter, r *http.Request) {
 			bgCtx, bgCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer bgCancel()
 			if err := db.IncrementScanCount(bgCtx, license.ID); err != nil {
-				fmt.Printf("[server] warn: increment scan count: %v\n", err)
+				slog.Warn("failed to increment scan count", "error", err)
 			}
 			if err := db.RecordScan(bgCtx, license.ID, clientVersion,
 				len(final), criticalCount, highCount, durationMS); err != nil {
-				fmt.Printf("[server] warn: record scan history: %v\n", err)
+				slog.Warn("failed to record scan history", "error", err)
 			}
 		}()
 	}
@@ -308,12 +308,16 @@ func extractFilesContent(chunks []ChunkPayload) map[string][]string {
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		slog.Error("json encode failed", "error", err)
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": msg}); err != nil {
+		slog.Error("json encode failed", "error", err)
+	}
 }
 

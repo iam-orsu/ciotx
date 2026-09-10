@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -106,7 +107,7 @@ func resolveKey(ctx context.Context, key string) (*db.License, error) {
 	}
 	if !errors.Is(dbErr, pgx.ErrNoRows) {
 		// Genuine DB error (connection down, etc.) — log server-side, fail secure.
-		fmt.Printf("[auth] db error during key lookup: %v\n", dbErr)
+		slog.Error("db error during key lookup", "error", dbErr)
 	}
 
 	// ── 2. Master key fallback ────────────────────────────────────────
