@@ -6,10 +6,10 @@ RUN apk add --no-cache gettext
 # Copy the nginx config template
 COPY nginx.conf.template /etc/nginx/templates/nginx.conf.template
 
-# Rate limiting zone (defined in http{} context via conf.d include)
-# 10r/m = ~1 request per 6 seconds per IP — generous for a scan tool (one scan = one request)
-# The burst=10 in nginx.conf.template allows short bursts (e.g. auth + scan back-to-back)
-RUN echo 'limit_req_zone $binary_remote_addr zone=api:10m rate=10r/m;' \
+# Rate limiting zones (defined in http{} context via conf.d include).
+# api:      10r/m — for /v1/ scan endpoints (one scan = one long-running request)
+# api_admin: 60r/m — for /admin panel; dashboard refreshes every 60s across ~3 endpoints
+RUN printf 'limit_req_zone $binary_remote_addr zone=api:10m rate=10r/m;\nlimit_req_zone $binary_remote_addr zone=api_admin:5m rate=60r/m;\n' \
     > /etc/nginx/conf.d/rate_limit.conf
 
 # Startup script: substitutes DOMAIN_NAME into config then starts nginx

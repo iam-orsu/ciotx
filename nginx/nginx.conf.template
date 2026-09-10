@@ -71,12 +71,13 @@ server {
     gzip_types application/json text/plain;
     gzip_min_length 512;
 
-    # ── Rate Limiting ───────────────────────────────────────────────
-    limit_req zone=api burst=10 nodelay;
     limit_req_status 429;
 
-    # ── API Proxy ───────────────────────────────────────────────────
+    # ── API Proxy (/v1/) ────────────────────────────────────────────
+    # Strict rate limit here: one long-running scan = one long HTTP request.
     location /v1/ {
+        limit_req zone=api burst=10 nodelay;
+
         proxy_pass         http://api:8080;
         proxy_http_version 1.1;
         proxy_set_header   Host              $host;
@@ -93,6 +94,25 @@ server {
         # Buffer large request bodies before sending to Go server
         proxy_request_buffering on;
         proxy_buffering         off;  # Stream responses back immediately
+    }
+
+    # ── Admin Web Panel ─────────────────────────────────────────────
+    # Relaxed rate limit: dashboard refreshes every 60s across ~3 endpoints.
+    # Auth is enforced in the Go handler (HMAC session cookie).
+    location /admin {
+        limit_req zone=api_admin burst=30 nodelay;
+
+        proxy_pass         http://api:8080;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   Connection        "";
+
+        proxy_read_timeout    30s;
+        proxy_send_timeout    30s;
+        proxy_connect_timeout 10s;
     }
 
     # ── Health Check (nginx → api, no rate limit, no logging) ──────

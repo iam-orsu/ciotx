@@ -44,6 +44,7 @@ services:
       - POSTGRES_USER=ciotx
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=ciotx
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
     expose:
       - "8080"
     networks:
@@ -81,9 +82,10 @@ services:
       - "443:443"
     volumes:
       # Let's Encrypt certs — read-only for nginx
-      - certbot-certs:/etc/letsencrypt:ro
+      # Bind mount matches the path deploy.sh writes to (./data/certbot/conf)
+      - ./data/certbot/conf:/etc/letsencrypt:ro
       # ACME challenge webroot
-      - certbot-webroot:/var/www/certbot
+      - ./data/certbot/www:/var/www/certbot
       # Generated install.sh (contains real DOMAIN_NAME, built by deploy.sh)
       - ./scripts/install.sh:/var/www/static/install.sh:ro
       # Pre-built CLI binaries served at /releases/
@@ -105,8 +107,8 @@ services:
     image: certbot/certbot:latest
     restart: unless-stopped
     volumes:
-      - certbot-certs:/etc/letsencrypt
-      - certbot-webroot:/var/www/certbot
+      - ./data/certbot/conf:/etc/letsencrypt
+      - ./data/certbot/www:/var/www/certbot
     # Checks every 12h; certbot only renews if expiry < 30 days
     entrypoint: >
       sh -c "trap exit TERM;
@@ -121,12 +123,11 @@ services:
           memory: 64M
 
 # ── Volumes ────────────────────────────────────────────────────────
+# certbot uses bind mounts to ./data/certbot/{conf,www} — not named volumes —
+# so deploy.sh's openssl bootstrap cert and the real Let's Encrypt cert are
+# visible to both the nginx and certbot containers without extra coordination.
 volumes:
   postgres-data:
-    driver: local
-  certbot-certs:
-    driver: local
-  certbot-webroot:
     driver: local
 
 # ── Networks ───────────────────────────────────────────────────────

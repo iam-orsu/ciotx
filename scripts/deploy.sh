@@ -69,6 +69,15 @@ for var in "${REQUIRED_VARS[@]}"; do
         && error "$var still has its placeholder value — fill it in."
 done
 
+# ADMIN_PASSWORD is optional (panel is disabled when unset), but warn if placeholder wasn't changed.
+ADMIN_PW="${ADMIN_PASSWORD:-}"
+if [[ -n "$ADMIN_PW" ]]; then
+    echo "$ADMIN_PW" | grep -qiE "change-me" \
+        && error "ADMIN_PASSWORD still has its placeholder value — set a strong password or leave it empty to disable the admin panel."
+    [[ ${#ADMIN_PW} -lt 12 ]] \
+        && warn "ADMIN_PASSWORD is very short — use at least 24 random characters in production."
+fi
+
 [[ "${LLM_API_KEY}" != sk-* ]] \
     && warn "LLM_API_KEY doesn't start with 'sk-' — double check it's correct."
 
@@ -180,8 +189,8 @@ header "Step 4 — Building CLI Binaries"
 
 # Require Go to be installed on the build machine (the VPS)
 if ! command -v go &>/dev/null; then
-    info "Go not found — installing Go 1.21..."
-    GO_TAR="go1.21.13.linux-amd64.tar.gz"
+    info "Go not found — installing Go 1.25..."
+    GO_TAR="go1.25.0.linux-amd64.tar.gz"
     curl -fsSL "https://dl.google.com/go/${GO_TAR}" -o "/tmp/${GO_TAR}"
     rm -rf /usr/local/go
     tar -C /usr/local -xzf "/tmp/${GO_TAR}"
@@ -310,9 +319,9 @@ info "Waiting for services to initialize..."
 sleep 20
 
 # =======================================================================
-# STEP 5: Health Check
+# STEP 6: Health Check
 # =======================================================================
-header "Step 5 — Health Verification"
+header "Step 6 — Health Verification"
 
 MAX_ATTEMPTS=12
 WAIT_SECONDS=5
@@ -351,6 +360,9 @@ echo ""
 echo -e "  ${BOLD}API Endpoint  ${NC}: https://${DOMAIN_NAME}"
 echo -e "  ${BOLD}Health Check  ${NC}: https://${DOMAIN_NAME}/health"
 echo -e "  ${BOLD}Install Script${NC}: https://${DOMAIN_NAME}/install.sh"
+if [[ -n "${ADMIN_PASSWORD:-}" ]]; then
+echo -e "  ${BOLD}Admin Panel   ${NC}: https://${DOMAIN_NAME}/admin"
+fi
 echo ""
 echo -e "  ${BOLD}Your master license key:${NC} ${MASTER_LICENSE_KEY}"
 echo ""

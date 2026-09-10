@@ -208,25 +208,9 @@ func AdminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 // ── Handlers ──────────────────────────────────────────────────────────────
 
-// AdminDashboardHandler serves the embedded admin SPA for GET /admin.
-// Returns 302 → /admin/login for unauthenticated requests so browsers can redirect.
-func AdminDashboardHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !isAdminAuthenticated(r) {
-		// Browsers: redirect to login page (which is the SPA itself with the login form visible).
-		// API clients hitting this with no cookie get the redirect too — acceptable.
-		http.Redirect(w, r, "/admin", http.StatusSeeOther)
-		return
-	}
-	// Serve dashboard (same file — JS decides what to show based on session).
-	AdminUIHandler(w, r)
-}
-
-// AdminUIHandler serves the raw HTML without auth check (login form is embedded).
-// Only called from AdminDashboardHandler or directly for the root /admin path.
+// AdminUIHandler serves the embedded admin SPA.
+// No server-side auth check — the SPA's JS calls /admin/api/stats on load;
+// if that returns 401 the login form is shown. Cookie is set by AdminLoginHandler.
 func AdminUIHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
