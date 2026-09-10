@@ -45,6 +45,10 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=ciotx
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      # GitHub App integration (Phase 6) — leave all three unset to disable.
+      - GITHUB_APP_ID=${GITHUB_APP_ID:-}
+      - GITHUB_APP_PRIVATE_KEY_BASE64=${GITHUB_APP_PRIVATE_KEY_BASE64:-}
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
     expose:
       - "8080"
     networks:
