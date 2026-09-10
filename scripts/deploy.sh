@@ -169,8 +169,10 @@ else
     sleep 8
 
     # Request the real certificate
+    # --entrypoint certbot overrides the renewal-loop entrypoint in docker-compose.yml
+    # so that certonly actually runs instead of being passed as a positional arg to sh.
     info "Requesting certificate (this may take 30–60 seconds)..."
-    docker compose run --rm certbot certonly \
+    docker compose run --rm --entrypoint certbot certbot certonly \
         --webroot \
         --webroot-path /var/www/certbot \
         --email "${SSL_EMAIL}" \
