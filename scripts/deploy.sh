@@ -168,6 +168,11 @@ else
     docker compose up -d nginx
     sleep 8
 
+    # Remove the bootstrap cert directory so certbot can create it fresh.
+    # Nginx has already loaded the cert into memory at startup — deleting the
+    # files from disk is safe; nginx keeps serving until it is reloaded.
+    rm -rf ./data/certbot/conf/live/"${DOMAIN_NAME}"
+
     # Request the real certificate
     # --entrypoint certbot overrides the renewal-loop entrypoint in docker-compose.yml
     # so that certonly actually runs instead of being passed as a positional arg to sh.
