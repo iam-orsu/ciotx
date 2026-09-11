@@ -119,6 +119,19 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 	}
 	owner, repo := parts[0], parts[1]
 
+	// ── Commit status tracking ───────────────────────────────────────
+	// Post a pending dot on the push commit immediately, then update it
+	// to success/failure/error when the job finishes.
+	prListURL := fmt.Sprintf("https://github.com/%s/%s/pulls?q=is%%3Apr+ciotx", owner, repo)
+	commitStatusState := "error"
+	commitStatusDesc := "Scan encountered an error"
+	_ = gh.CreateCommitStatus(ctx, token, owner, repo, job.HeadSHA,
+		"pending", "Security scan in progress...", prListURL)
+	defer func() {
+		_ = gh.CreateCommitStatus(context.Background(), token, owner, repo, job.HeadSHA,
+			commitStatusState, commitStatusDesc, prListURL)
+	}()
+
 	// ── 3. Fetch repo files via GitHub API ──────────────────────────
 	log.Info("fetching repo files", "sha", job.HeadSHA)
 	files, err := gh.FetchRepoFiles(ctx, token, owner, repo, job.HeadSHA)
@@ -127,6 +140,8 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 	}
 	if len(files) == 0 {
 		log.Info("no scannable files found")
+		commitStatusState = "success"
+		commitStatusDesc = "No scannable files found"
 		return 0, nil
 	}
 	log.Info("files fetched", "count", len(files))
@@ -158,6 +173,8 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 
 	if len(candidateFindings) == 0 {
 		log.Info("no candidate findings")
+		commitStatusState = "success"
+		commitStatusDesc = "No security problems found"
 		return 0, nil
 	}
 
@@ -172,6 +189,8 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 	log.Info("verification", "verified", len(verified), "dropped", dropped)
 
 	if len(verified) == 0 {
+		commitStatusState = "success"
+		commitStatusDesc = "No security problems found"
 		return 0, nil
 	}
 
@@ -181,6 +200,8 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 	log.Info("audit", "final", len(final), "rejected", rejected)
 
 	if len(final) == 0 {
+		commitStatusState = "success"
+		commitStatusDesc = "No security problems found"
 		return 0, nil
 	}
 
@@ -195,6 +216,21 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 	}
 
 	groups := groupFindingsByFile(final, eligibleSeverities)
+
+	// Set commit status based on Critical/High count now that we know what was found.
+	critHighCount := 0
+	for _, f := range final {
+		if f.Severity == "Critical" || f.Severity == "High" {
+			critHighCount++
+		}
+	}
+	if critHighCount > 0 {
+		commitStatusState = "failure"
+		commitStatusDesc = fmt.Sprintf("%d security problem(s) found - see PR", critHighCount)
+	} else {
+		commitStatusState = "success"
+		commitStatusDesc = "No critical or high severity problems found"
+	}
 
 	prsOpened := 0
 	for _, group := range groups {

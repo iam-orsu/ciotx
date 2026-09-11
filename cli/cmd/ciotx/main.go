@@ -206,11 +206,11 @@ func cmdScan(target string) int {
 		DurationSeconds:        duration,
 	}
 
-	htmlPath := "ciotx-report.html"
+	pdfPath := "ciotx-report.pdf"
 	jsonPath := "ciotx-findings.json"
 
-	if err := report.WriteHTML(findings, stats, targetDir, htmlPath); err != nil {
-		fmt.Fprintf(os.Stderr, "  [!] Failed to write HTML report: %v\n", err)
+	if err := report.WritePDF(findings, stats, targetDir, pdfPath); err != nil {
+		fmt.Fprintf(os.Stderr, "  [!] Failed to write PDF report: %v\n", err)
 	}
 	if err := report.WriteJSON(findings, jsonPath); err != nil {
 		fmt.Fprintf(os.Stderr, "  [!] Failed to write JSON findings: %v\n", err)
@@ -242,7 +242,7 @@ func cmdScan(target string) int {
 		}
 	}
 
-	fmt.Printf("\n  Report    : %s\n", absPath(htmlPath))
+	fmt.Printf("\n  Report    : %s\n", absPath(pdfPath))
 	fmt.Printf("  Scan time : %.1fs\n", duration)
 	if scanResp.Stats.EstimatedCostUSD > 0 {
 		fmt.Printf("  Cost      : $%.4f\n", scanResp.Stats.EstimatedCostUSD)

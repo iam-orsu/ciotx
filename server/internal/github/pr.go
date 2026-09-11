@@ -207,6 +207,26 @@ func SanitizeFilePath(path string) string {
 	return result
 }
 
+// CreateCommitStatus posts a status check on a specific commit SHA.
+// state must be one of: "pending", "success", "failure", "error".
+// description is the short text shown next to the dot in the GitHub UI (max 140 chars).
+// targetURL is the URL users click for details — may be empty.
+func CreateCommitStatus(ctx context.Context, token, owner, repo, sha, state, description, targetURL string) error {
+	if len(description) > 140 {
+		description = description[:140]
+	}
+	payload := map[string]string{
+		"state":       state,
+		"description": description,
+		"context":     "ciotx/security-scan",
+	}
+	if targetURL != "" {
+		payload["target_url"] = targetURL
+	}
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/statuses/%s", owner, repo, sha)
+	return ghPost(ctx, token, url, payload, http.StatusCreated, nil)
+}
+
 // ── internal HTTP helpers ──────────────────────────────────────────────────
 
 func ghPatch(ctx context.Context, token, url string, payload interface{}) error {

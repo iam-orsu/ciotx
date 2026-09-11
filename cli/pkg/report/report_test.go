@@ -80,90 +80,82 @@ func TestWriteJSON_EmptyFindings(t *testing.T) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// WriteHTML
+// WritePDF
 // ──────────────────────────────────────────────────────────────────────────────
 
-func TestWriteHTML_ProducesValidHTML(t *testing.T) {
+func TestWritePDF_ProducesValidPDF(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "report.html")
+	path := filepath.Join(dir, "report.pdf")
 	stats := &ScanStats{TotalFiles: 5, TotalLines: 300, DurationSeconds: 12.5}
 
-	if err := WriteHTML(sampleFindings, stats, "/project", path); err != nil {
-		t.Fatalf("WriteHTML error: %v", err)
+	if err := WritePDF(sampleFindings, stats, "/project", path); err != nil {
+		t.Fatalf("WritePDF error: %v", err)
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile error: %v", err)
 	}
-	html := string(data)
-
-	for _, must := range []string{"<!DOCTYPE html>", "<html", "SQL Injection", "Reflected XSS", "CWE-89", "ciotx"} {
-		if !strings.Contains(html, must) {
-			t.Errorf("HTML missing expected string %q", must)
-		}
+	if len(data) < 100 {
+		t.Fatalf("PDF too small (%d bytes) — likely empty or invalid", len(data))
+	}
+	// Every valid PDF starts with %PDF
+	if !strings.HasPrefix(string(data[:5]), "%PDF-") {
+		t.Errorf("output does not start with PDF magic bytes, got: %q", string(data[:8]))
 	}
 }
 
-func TestWriteHTML_EscapesUserContent(t *testing.T) {
+func TestWritePDF_EmptyFindings(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "report.html")
-	xssFindings := []*types.Finding{
-		{
-			Title:    `<script>alert(1)</script>`,
-			Severity: "Critical",
-			File:     "evil.go",
-			Evidence: `<img src=x onerror=alert(1)>`,
-		},
-	}
+	path := filepath.Join(dir, "report.pdf")
 	stats := &ScanStats{}
-	if err := WriteHTML(xssFindings, stats, "/project", path); err != nil {
-		t.Fatalf("WriteHTML error: %v", err)
+
+	if err := WritePDF([]*types.Finding{}, stats, "/project", path); err != nil {
+		t.Fatalf("WritePDF error: %v", err)
 	}
 
 	data, _ := os.ReadFile(path)
-	html := string(data)
-	if strings.Contains(html, "<script>alert(1)</script>") {
-		t.Error("HTML report contains unescaped <script> tag — XSS in report")
+	if len(data) < 100 {
+		t.Error("PDF for empty findings is unexpectedly small")
+	}
+	if !strings.HasPrefix(string(data[:5]), "%PDF-") {
+		t.Error("output does not look like a PDF")
 	}
 }
 
-func TestWriteHTML_EmptyFindings(t *testing.T) {
+func TestWritePDF_AllSeverities(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "report.html")
-	stats := &ScanStats{}
+	path := filepath.Join(dir, "report.pdf")
+	stats := &ScanStats{TotalFiles: 10, TotalLines: 5000}
 
-	if err := WriteHTML([]*types.Finding{}, stats, "/project", path); err != nil {
-		t.Fatalf("WriteHTML error: %v", err)
+	mixed := []*types.Finding{
+		{Title: "Critical Issue", Severity: "Critical", File: "a.go", LineStart: 1, CWE: "CWE-89", Description: "SQL injection", Evidence: `db.Query(input)`},
+		{Title: "High Issue", Severity: "High", File: "b.go", LineStart: 10, CWE: "CWE-79"},
+		{Title: "Medium Issue", Severity: "Medium", File: "c.go", LineStart: 20},
+		{Title: "Low Issue", Severity: "Low", File: "d.go", LineStart: 30, Remediation: "Sanitize output"},
+	}
+
+	if err := WritePDF(mixed, stats, "/repo", path); err != nil {
+		t.Fatalf("WritePDF error: %v", err)
 	}
 
 	data, _ := os.ReadFile(path)
-	if !strings.Contains(string(data), "No Vulnerabilities Found") {
-		t.Error("expected empty-state message in HTML report")
+	if len(data) < 100 {
+		t.Error("PDF unexpectedly small for 4 findings")
 	}
 }
 
-func TestWriteHTML_SeveritySorting(t *testing.T) {
+func TestWritePDF_LongEvidence(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "report.html")
-	// Low severity finding listed first — should appear after Critical in report
-	unordered := []*types.Finding{
-		{Title: "Low Issue", Severity: "Low", File: "a.go"},
-		{Title: "Critical Issue", Severity: "Critical", File: "b.go"},
-	}
+	path := filepath.Join(dir, "report.pdf")
 	stats := &ScanStats{}
-	if err := WriteHTML(unordered, stats, "/project", path); err != nil {
-		t.Fatalf("WriteHTML error: %v", err)
+
+	longEvidence := strings.Repeat("x := very_long_identifier_name_to_test_wrapping(input)\n", 20)
+	findings := []*types.Finding{
+		{Title: "Long Evidence Test", Severity: "High", File: "big.go", LineStart: 1, Evidence: longEvidence},
 	}
 
-	data, _ := os.ReadFile(path)
-	html := string(data)
-	critIdx := strings.Index(html, "Critical Issue")
-	lowIdx := strings.Index(html, "Low Issue")
-	if critIdx == -1 || lowIdx == -1 {
-		t.Fatal("could not find both findings in HTML")
-	}
-	if critIdx > lowIdx {
-		t.Error("Critical finding should appear before Low finding in sorted output")
+	if err := WritePDF(findings, stats, "/project", path); err != nil {
+		t.Fatalf("WritePDF with long evidence: %v", err)
 	}
 }
