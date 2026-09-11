@@ -373,9 +373,11 @@ func cmdUpdate() int {
 	fmt.Println("  ciotx — Self-Update")
 	fmt.Println(strings.Repeat("─", 50))
 
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+
 	// Fetch the latest version string from the server.
 	versionURL := APIEndpoint + "/releases/version.txt"
-	resp, err := http.Get(versionURL) //nolint:gosec // URL comes from trusted build-time constant
+	resp, err := httpClient.Get(versionURL) //nolint:gosec // URL is a trusted build-time constant
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\n[!] Could not reach update server: %v\n", err)
 		return 1
@@ -385,7 +387,11 @@ func cmdUpdate() int {
 		fmt.Fprintf(os.Stderr, "\n[!] Update server returned %d — try again later.\n", resp.StatusCode)
 		return 1
 	}
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\n[!] Failed to read version from server: %v\n", err)
+		return 1
+	}
 	latest := strings.TrimSpace(string(body))
 	if latest == "" {
 		fmt.Fprintln(os.Stderr, "\n[!] Server returned an empty version — update unavailable.")
@@ -412,49 +418,70 @@ func cmdUpdate() int {
 
 	fmt.Printf("\n  Downloading %s...\n", binaryName)
 
-	dlResp, err := http.Get(downloadURL) //nolint:gosec
+	dlResp, err := httpClient.Get(downloadURL) //nolint:gosec
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[!] Download failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "\n[!] Download failed: %v\n", err)
 		return 1
 	}
 	defer dlResp.Body.Close()
 	if dlResp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "[!] Download returned HTTP %d\n", dlResp.StatusCode)
+		fmt.Fprintf(os.Stderr, "\n[!] Download returned HTTP %d\n", dlResp.StatusCode)
 		return 1
 	}
 
 	// Find the path of the currently running binary.
 	exePath, err := os.Executable()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[!] Cannot determine executable path: %v\n", err)
+		fmt.Fprintf(os.Stderr, "\n[!] Cannot determine executable path: %v\n", err)
 		return 1
 	}
 	// Resolve symlinks so we write to the real file.
 	exePath, err = filepath.EvalSymlinks(exePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[!] Cannot resolve executable path: %v\n", err)
+		fmt.Fprintf(os.Stderr, "\n[!] Cannot resolve executable path: %v\n", err)
 		return 1
 	}
 
-	// Write to a temp file next to the binary, then atomically rename.
+	// Write new binary to a temp file next to the current one.
 	tmpPath := exePath + ".update_tmp"
 	tmpFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[!] Cannot write update (try sudo): %v\n", err)
+		fmt.Fprintf(os.Stderr, "\n[!] Cannot write update (try sudo): %v\n", err)
 		return 1
 	}
 	if _, err = io.Copy(tmpFile, dlResp.Body); err != nil {
 		tmpFile.Close()
 		os.Remove(tmpPath)
-		fmt.Fprintf(os.Stderr, "[!] Download interrupted: %v\n", err)
+		fmt.Fprintf(os.Stderr, "\n[!] Download interrupted: %v\n", err)
 		return 1
 	}
 	tmpFile.Close()
 
-	if err = os.Rename(tmpPath, exePath); err != nil {
-		os.Remove(tmpPath)
-		fmt.Fprintf(os.Stderr, "[!] Could not replace binary (try sudo): %v\n", err)
-		return 1
+	// On Windows, a running EXE cannot be overwritten directly.
+	// Rename it out of the way first, then rename the new binary in.
+	if goos == "windows" {
+		oldPath := exePath + ".old"
+		os.Remove(oldPath) // clean up any leftover from a previous update
+		if err = os.Rename(exePath, oldPath); err != nil {
+			os.Remove(tmpPath)
+			fmt.Fprintf(os.Stderr, "\n[!] Could not move old binary (try closing all ciotx instances): %v\n", err)
+			return 1
+		}
+		if err = os.Rename(tmpPath, exePath); err != nil {
+			// Restore the old binary so the user isn't left with nothing.
+			os.Rename(oldPath, exePath)
+			os.Remove(tmpPath)
+			fmt.Fprintf(os.Stderr, "\n[!] Could not replace binary: %v\n", err)
+			return 1
+		}
+		os.Remove(oldPath)
+	} else {
+		// Unix: rename over a running binary is safe — the kernel keeps the old inode alive.
+		if err = os.Rename(tmpPath, exePath); err != nil {
+			os.Remove(tmpPath)
+			fmt.Fprintf(os.Stderr, "\n[!] Could not replace binary (try sudo): %v\n", err)
+			return 1
+		}
 	}
 
 	fmt.Printf("\n  [+] Updated to %s — restart ciotx to use the new version.\n\n", latest)
