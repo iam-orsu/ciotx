@@ -16,8 +16,8 @@ import (
 // internal constants — never logged, never returned to users
 const (
 	providerEndpoint = "https://api.deepseek.com/chat/completions"
-	modelDiscovery   = "deepseek-v4-pro" // highest reasoning, lowest hallucinations
-	modelAudit       = "deepseek-flash"  // fast skeptical second pass
+	modelDiscovery   = "deepseek-flash" // fast discovery pass
+	modelAudit       = "deepseek-flash" // fast skeptical second pass
 )
 
 type message struct {
@@ -83,16 +83,11 @@ const (
 // model must be one of the model* constants exported by this package.
 func CostUSD(u Usage, model string) float64 {
 	const m = 1_000_000.0
-	switch model {
-	case modelDiscovery:
-		return (float64(u.CacheMissTokens)*priceDiscoveryCacheMiss+
-			float64(u.CacheHitTokens)*priceDiscoveryCacheHit)/m +
-			float64(u.CompletionTokens)*priceDiscoveryOutput/m
-	default: // modelAudit (deepseek-flash)
-		return (float64(u.CacheMissTokens)*priceAuditCacheMiss+
-			float64(u.CacheHitTokens)*priceAuditCacheHit)/m +
-			float64(u.CompletionTokens)*priceAuditOutput/m
-	}
+	// Both discovery and audit currently use deepseek-flash; always use audit rates.
+	_ = model
+	return (float64(u.CacheMissTokens)*priceAuditCacheMiss+
+		float64(u.CacheHitTokens)*priceAuditCacheHit)/m +
+		float64(u.CompletionTokens)*priceAuditOutput/m
 }
 
 // Client is the internal LLM provider client.
@@ -129,16 +124,7 @@ func (c *Client) Chat(ctx context.Context, model string, messages []message, jso
 		MaxTokens:   maxTokens,
 		Temperature: 0.1,
 	}
-	// deepseek-v4-pro requires explicit opt-in for thinking mode; without it
-	// the model behaves as a plain chat model and loses all reasoning capability.
-	// reasoning_effort "low" keeps scan time at ~1-2 min per chunk; "high" can
-	// exceed 5 min per chunk with diminishing security-finding returns.
-	if model == modelDiscovery {
-		req.Thinking = &thinkingConfig{Type: "enabled"}
-		req.ReasoningEffort = "low"
-	}
-	// Thinking models do not support json_object response format.
-	if jsonMode && model != modelDiscovery {
+	if jsonMode {
 		req.ResponseFormat = &responseFormat{Type: "json_object"}
 	}
 

@@ -13,8 +13,8 @@ func TestCostUSD_Discovery(t *testing.T) {
 		CacheMissTokens:  800_000,
 	}
 	got := CostUSD(u, modelDiscovery)
-	want := (800_000*priceDiscoveryCacheMiss+200_000*priceDiscoveryCacheHit)/1_000_000 +
-		500_000*priceDiscoveryOutput/1_000_000
+	want := (800_000*priceAuditCacheMiss+200_000*priceAuditCacheHit)/1_000_000 +
+		500_000*priceAuditOutput/1_000_000
 	if math.Abs(got-want) > 1e-9 {
 		t.Errorf("CostUSD(discovery) = %f, want %f", got, want)
 	}
