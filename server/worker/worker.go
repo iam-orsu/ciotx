@@ -28,8 +28,13 @@ const (
 	pollInterval = 10 * time.Second
 
 	// scanTimeout is the total budget for one repo scan + PR creation.
-	// Shorter than the main scan timeout because we also allocate time for fix generation.
 	scanTimeout = 25 * time.Minute
+
+	// maxScanCostUSD is the per-scan LLM spend ceiling.
+	// If discovery costs exceed this amount mid-scan, we stop processing further
+	// chunks, run verification and audit on what we have, and mark the scan partial.
+	// Keeps runaway costs in check for very large repos.
+	maxScanCostUSD = 10.0
 )
 
 // Start launches n worker goroutines that run until ctx is cancelled.
@@ -134,7 +139,7 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 
 	// ── 3. Fetch repo files via GitHub API ──────────────────────────
 	log.Info("fetching repo files", "sha", job.HeadSHA)
-	files, err := gh.FetchRepoFiles(ctx, token, owner, repo, job.HeadSHA)
+	files, sizeLimited, err := gh.FetchRepoFiles(ctx, token, owner, repo, job.HeadSHA)
 	if err != nil {
 		return 0, fmt.Errorf("fetch repo files: %w", err)
 	}
@@ -143,6 +148,9 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 		commitStatusState = "success"
 		commitStatusDesc = "No scannable files found"
 		return 0, nil
+	}
+	if sizeLimited {
+		log.Warn("repo exceeds size limit — scan is partial", "files_scanned", len(files))
 	}
 	log.Info("files fetched", "count", len(files))
 
@@ -155,10 +163,12 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 	// ── 5. Run discovery pass across all chunks ──────────────────────
 	llmClient := llm.NewClient()
 	chunks := gh.PartitionFiles(files)
+	log.Info("starting discovery", "chunks", len(chunks))
 
 	var candidateFindings []*types.Finding
 	discoveryUsage := &llm.Usage{}
 	var usageMu sync.Mutex
+	costLimited := false
 
 	for i, chunk := range chunks {
 		payload := gh.FormatChunkPayload(chunk)
@@ -168,13 +178,31 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 			continue
 		}
 		candidateFindings = append(candidateFindings, findings...)
-		log.Info("chunk scanned", "chunk", i+1, "candidates", len(findings))
+
+		// Check accumulated spend after every chunk.
+		spentUSD := llm.CostUSD(*discoveryUsage, llm.DiscoveryModel())
+		log.Info("chunk scanned", "chunk", i+1, "of", len(chunks), "candidates", len(findings), "cost_usd", spentUSD)
+
+		if spentUSD >= maxScanCostUSD {
+			log.Warn("scan cost budget reached — stopping discovery early",
+				"cost_usd", spentUSD, "chunks_done", i+1, "chunks_total", len(chunks))
+			costLimited = true
+			break
+		}
 	}
+
+	// If scanning was partial for any reason, we still surface what was found
+	// but adjust the commit status description so the team knows.
+	partialScan := sizeLimited || costLimited
 
 	if len(candidateFindings) == 0 {
 		log.Info("no candidate findings")
 		commitStatusState = "success"
-		commitStatusDesc = "No security problems found"
+		if partialScan {
+			commitStatusDesc = "Partial scan complete - no issues found in scanned portion"
+		} else {
+			commitStatusDesc = "No security problems found"
+		}
 		return 0, nil
 	}
 
@@ -190,7 +218,11 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 
 	if len(verified) == 0 {
 		commitStatusState = "success"
-		commitStatusDesc = "No security problems found"
+		if partialScan {
+			commitStatusDesc = "Partial scan complete - no issues found in scanned portion"
+		} else {
+			commitStatusDesc = "No security problems found"
+		}
 		return 0, nil
 	}
 
@@ -201,7 +233,11 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 
 	if len(final) == 0 {
 		commitStatusState = "success"
-		commitStatusDesc = "No security problems found"
+		if partialScan {
+			commitStatusDesc = "Partial scan complete - no issues found in scanned portion"
+		} else {
+			commitStatusDesc = "No security problems found"
+		}
 		return 0, nil
 	}
 
@@ -226,10 +262,18 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 	}
 	if critHighCount > 0 {
 		commitStatusState = "failure"
-		commitStatusDesc = fmt.Sprintf("%d security problem(s) found - see PR", critHighCount)
+		if partialScan {
+			commitStatusDesc = fmt.Sprintf("%d security problem(s) found in partial scan - see PR", critHighCount)
+		} else {
+			commitStatusDesc = fmt.Sprintf("%d security problem(s) found - see PR", critHighCount)
+		}
 	} else {
 		commitStatusState = "success"
-		commitStatusDesc = "No critical or high severity problems found"
+		if partialScan {
+			commitStatusDesc = "Partial scan - no critical/high issues in scanned portion"
+		} else {
+			commitStatusDesc = "No critical or high severity problems found"
+		}
 	}
 
 	prsOpened := 0

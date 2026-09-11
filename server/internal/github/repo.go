@@ -11,8 +11,16 @@ import (
 	"strings"
 )
 
-// maxFileBytes matches the CLI's ingest limit — skip files larger than this.
-const maxFileBytes = 512 * 1024
+const (
+	// maxFileBytes is the per-file size ceiling. Files larger than this are
+	// almost always minified bundles or generated files — skip them.
+	maxFileBytes = 2 * 1024 * 1024 // 2 MB per file
+
+	// maxCodebaseBytes is the total scannable-source ceiling per scan.
+	// When hit, scanning stops and FetchRepoFiles signals sizeLimited=true
+	// so the caller can surface a "partial scan" status to the user.
+	maxCodebaseBytes = 200 * 1024 * 1024 // 200 MB total
+)
 
 // supportedExtensions mirrors cli/pkg/scanner/ingest.go SupportedExtensions.
 var supportedExtensions = map[string]bool{
@@ -58,19 +66,25 @@ type treeResponse struct {
 }
 
 // FetchRepoFiles returns all scannable source files from a repo at a given commit SHA.
-// Uses the GitHub git trees API (recursive) then fetches individual file contents.
-// Token must be a valid installation access token.
-func FetchRepoFiles(ctx context.Context, token, owner, repo, sha string) ([]*RepoFile, error) {
+// sizeLimited is true when scanning stopped early because the repo hit maxCodebaseBytes
+// OR because GitHub's own recursive tree API truncated the entry list (>100k files).
+// In both cases the returned files are the portion that was scanned.
+func FetchRepoFiles(ctx context.Context, token, owner, repo, sha string) (files []*RepoFile, sizeLimited bool, err error) {
 	// Step 1: get the full recursive tree.
 	treeURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/git/trees/%s?recursive=1", owner, repo, sha)
 	treeBody, err := ghGet(ctx, token, treeURL)
 	if err != nil {
-		return nil, fmt.Errorf("fetch repo tree: %w", err)
+		return nil, false, fmt.Errorf("fetch repo tree: %w", err)
 	}
 
 	var tree treeResponse
 	if err := json.Unmarshal(treeBody, &tree); err != nil {
-		return nil, fmt.Errorf("parse repo tree: %w", err)
+		return nil, false, fmt.Errorf("parse repo tree: %w", err)
+	}
+
+	// GitHub truncates recursive tree responses at 100,000 entries.
+	if tree.Truncated {
+		sizeLimited = true
 	}
 
 	// Step 2: filter to scannable blobs.
@@ -83,7 +97,6 @@ func FetchRepoFiles(ctx context.Context, token, owner, repo, sha string) ([]*Rep
 		if e.Size > maxFileBytes {
 			continue
 		}
-		// Check path components for ignored dirs.
 		if inIgnoredPath(e.Path) {
 			continue
 		}
@@ -95,22 +108,22 @@ func FetchRepoFiles(ctx context.Context, token, owner, repo, sha string) ([]*Rep
 		if ignoreFiles[base] {
 			continue
 		}
-		totalBytes += e.Size
-		if totalBytes > 25*1024*1024 {
-			break // respect the same 25MB total limit as the CLI
+		if totalBytes+e.Size > maxCodebaseBytes {
+			// Soft stop: record that we hit the ceiling and stop adding files.
+			sizeLimited = true
+			break
 		}
+		totalBytes += e.Size
 		scannable = append(scannable, e)
 	}
 
 	// Step 3: fetch file contents in sequence.
-	var files []*RepoFile
 	for _, e := range scannable {
-		content, blobSHA, err := fetchFileContent(ctx, token, owner, repo, e.Path, sha)
-		if err != nil {
-			// Skip unreadable files — don't abort the whole scan.
-			continue
+		content, blobSHA, fetchErr := fetchFileContent(ctx, token, owner, repo, e.Path, sha)
+		if fetchErr != nil {
+			continue // skip unreadable files — don't abort the whole scan
 		}
-		// Skip binary content.
+		// Skip binary content (null bytes in first 8 KB).
 		sample := content
 		if len(sample) > 8192 {
 			sample = sample[:8192]
@@ -131,7 +144,7 @@ func FetchRepoFiles(ctx context.Context, token, owner, repo, sha string) ([]*Rep
 			SHA:     blobSHA,
 		})
 	}
-	return files, nil
+	return files, sizeLimited, nil
 }
 
 // fetchFileContent fetches the decoded text content of one file at a given ref.
