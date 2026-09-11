@@ -43,6 +43,72 @@ func CreateBranch(ctx context.Context, token, owner, repo, branchName, baseSHA s
 		payload, http.StatusCreated, nil)
 }
 
+// BranchExists returns true if the named branch exists in the repo.
+func BranchExists(ctx context.Context, token, owner, repo, branchName string) (bool, error) {
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/git/refs/heads/%s", owner, repo, branchName)
+	_, err := ghGet(ctx, token, url)
+	if err != nil {
+		if strings.Contains(err.Error(), "HTTP 404") {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// DeleteBranch removes a branch ref. Non-fatal if the branch doesn't exist.
+func DeleteBranch(ctx context.Context, token, owner, repo, branchName string) error {
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/git/refs/heads/%s", owner, repo, branchName)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "ciotx-server/1.0")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("GitHub DELETE branch %s: %w", branchName, err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body) //nolint:errcheck
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("GitHub DELETE branch %s: HTTP %d", branchName, resp.StatusCode)
+	}
+	return nil
+}
+
+// FindOpenPR returns the PR number of the first open PR whose head branch matches
+// headBranch, or 0 if no open PR exists for that branch.
+func FindOpenPR(ctx context.Context, token, owner, repo, headBranch string) (int64, error) {
+	url := fmt.Sprintf(
+		"https://api.github.com/repos/%s/%s/pulls?state=open&head=%s:%s&per_page=5",
+		owner, repo, owner, headBranch,
+	)
+	body, err := ghGet(ctx, token, url)
+	if err != nil {
+		return 0, err
+	}
+	var prs []struct {
+		Number int64 `json:"number"`
+	}
+	if err := json.Unmarshal(body, &prs); err != nil {
+		return 0, err
+	}
+	if len(prs) == 0 {
+		return 0, nil
+	}
+	return prs[0].Number, nil
+}
+
+// UpdatePRBody replaces the body of an existing pull request.
+func UpdatePRBody(ctx context.Context, token, owner, repo string, prNumber int64, body string) error {
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls/%d", owner, repo, prNumber)
+	return ghPatch(ctx, token, url, map[string]interface{}{"body": body})
+}
+
 // OpenPR creates a pull request and returns its HTML URL.
 func OpenPR(ctx context.Context, token, owner, repo, title, body, headBranch, baseBranch string) (string, error) {
 	payload := map[string]interface{}{
@@ -105,7 +171,8 @@ func CreateEmptyCommit(ctx context.Context, token, owner, repo, branchName, base
 	return nil
 }
 
-// SanitizeBranchName converts a CWE string like "CWE-89" into a valid branch segment.
+// SanitizeBranchName converts an arbitrary string (e.g. a CWE like "CWE-89")
+// into a valid git branch segment containing only lowercase alphanumeric chars and dashes.
 func SanitizeBranchName(s string) string {
 	s = strings.ToLower(s)
 	var out strings.Builder
@@ -115,6 +182,29 @@ func SanitizeBranchName(s string) string {
 		}
 	}
 	return out.String()
+}
+
+// SanitizeFilePath converts a file path like "src/api/database.py" into a valid
+// git branch segment like "src-api-database-py" for use in deterministic branch names.
+func SanitizeFilePath(path string) string {
+	s := strings.ToLower(path)
+	var out strings.Builder
+	prev := '-'
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			out.WriteRune(r)
+			prev = r
+		} else if prev != '-' {
+			out.WriteRune('-')
+			prev = '-'
+		}
+	}
+	result := strings.Trim(out.String(), "-")
+	// Hard cap so branch names stay within GitHub's 250-char limit.
+	if len(result) > 200 {
+		result = result[:200]
+	}
+	return result
 }
 
 // ── internal HTTP helpers ──────────────────────────────────────────────────
@@ -177,4 +267,3 @@ func ghPost(ctx context.Context, token, url string, payload interface{}, expectS
 	}
 	return nil
 }
-
