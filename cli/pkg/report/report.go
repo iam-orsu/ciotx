@@ -99,6 +99,8 @@ func WritePDF(findings []*types.Finding, stats *ScanStats, targetDir, outputPath
 		dc(pdf, colBorder)
 		pdf.SetLineWidth(0.2)
 		pdf.Line(mgL, 13.5, mgL+cW, 13.5)
+		// Reset cursor to content area so body always starts below the header band.
+		pdf.SetXY(mgL, mgT)
 	})
 
 	// Footer on every page except the cover.
