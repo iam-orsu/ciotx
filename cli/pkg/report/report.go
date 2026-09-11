@@ -185,6 +185,7 @@ func WritePDF(findings []*types.Finding, stats *ScanStats, targetDir, outputPath
 	// ── Section title ────────────────────────────────────────────────
 	pdf.SetFont("Helvetica", "B", 13)
 	setColor(pdf, colText)
+	pdf.SetX(margin) // reset X — stats bar CellFormat loop leaves X at the right edge
 	pdf.Cell(cw, 7, "Security Findings")
 	pdf.Ln(8)
 
@@ -233,16 +234,13 @@ func drawFinding(pdf *fpdf.Fpdf, f *types.Finding, num int, margin, cw float64) 
 
 	cardY := pdf.GetY()
 
-	// Left accent border
-	setFill(pdf, sc)
-	pdf.Rect(margin, cardY, 3, 1000, "F") // will be clipped by card height later — draw after
-
-	// Card background
+	// Card header background (top corners rounded, bottom corners square).
+	// The left 3mm column is reserved for the severity accent bar drawn at the end.
 	setFill(pdf, rgb{252, 253, 254})
 	setDraw(pdf, colBorder)
 	cardX := margin + 3
 	cardInnerW := cw - 3
-	pdf.RoundedRectExt(cardX, cardY, cardInnerW, 10, 0, 2, 2, 0, "FD") // top corners rounded
+	pdf.RoundedRectExt(cardX, cardY, cardInnerW, 10, 2, 2, 0, 0, "FD") // rTL=2 rTR=2 rBR=0 rBL=0
 
 	// ── Finding header row ───────────────────────────────────────────
 	headerH := 9.0
@@ -362,16 +360,14 @@ func drawFinding(pdf *fpdf.Fpdf, f *types.Finding, num int, margin, cw float64) 
 
 	pdf.Ln(3)
 
-	// Now draw the left accent bar to exact card height
+	// Draw the left accent bar now that we know the card's full height.
+	// Guard against negative height if a page break occurred mid-card.
 	cardEndY := pdf.GetY()
 	cardH := cardEndY - cardY
-	setFill(pdf, sc)
-	pdf.Rect(margin, cardY, 3, cardH, "F")
-
-	// Card bottom border
-	setFill(pdf, rgb{252, 253, 254})
-	setDraw(pdf, colBorder)
-	pdf.RoundedRectExt(cardX, cardY+cardH-2, cardInnerW, 2, 0, 0, 2, 2, "FD")
+	if cardH > 0 {
+		setFill(pdf, sc)
+		pdf.Rect(margin, cardY, 3, cardH, "F")
+	}
 
 	pdf.Ln(4) // gap between cards
 }
