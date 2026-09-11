@@ -30,12 +30,13 @@ type thinkingConfig struct {
 }
 
 type chatRequest struct {
-	Model          string          `json:"model"`
-	Messages       []message       `json:"messages"`
-	MaxTokens      int             `json:"max_tokens"`
-	Temperature    float64         `json:"temperature"`
-	ResponseFormat interface{}     `json:"response_format,omitempty"`
-	Thinking       *thinkingConfig `json:"thinking,omitempty"`
+	Model           string          `json:"model"`
+	Messages        []message       `json:"messages"`
+	MaxTokens       int             `json:"max_tokens"`
+	Temperature     float64         `json:"temperature"`
+	ResponseFormat  interface{}     `json:"response_format,omitempty"`
+	Thinking        *thinkingConfig `json:"thinking,omitempty"`
+	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
 }
 
 type responseFormat struct {
@@ -130,8 +131,11 @@ func (c *Client) Chat(ctx context.Context, model string, messages []message, jso
 	}
 	// deepseek-v4-pro requires explicit opt-in for thinking mode; without it
 	// the model behaves as a plain chat model and loses all reasoning capability.
+	// reasoning_effort "low" keeps scan time at ~1-2 min per chunk; "high" can
+	// exceed 5 min per chunk with diminishing security-finding returns.
 	if model == modelDiscovery {
 		req.Thinking = &thinkingConfig{Type: "enabled"}
+		req.ReasoningEffort = "low"
 	}
 	// Thinking models do not support json_object response format.
 	if jsonMode && model != modelDiscovery {
