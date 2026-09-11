@@ -16,8 +16,8 @@ import (
 // internal constants — never logged, never returned to users
 const (
 	providerEndpoint = "https://api.deepseek.com/chat/completions"
-	modelDiscovery   = "deepseek-reasoner" // highest reasoning, lowest hallucinations
-	modelAudit       = "deepseek-chat"     // fast skeptical second pass
+	modelDiscovery   = "deepseek-v4-pro" // highest reasoning, lowest hallucinations
+	modelAudit       = "deepseek-flash"  // fast skeptical second pass
 )
 
 type message struct {
@@ -25,12 +25,17 @@ type message struct {
 	Content string `json:"content"`
 }
 
+type thinkingConfig struct {
+	Type string `json:"type"` // "enabled"
+}
+
 type chatRequest struct {
-	Model          string      `json:"model"`
-	Messages       []message   `json:"messages"`
-	MaxTokens      int         `json:"max_tokens"`
-	Temperature    float64     `json:"temperature"`
-	ResponseFormat interface{} `json:"response_format,omitempty"`
+	Model          string          `json:"model"`
+	Messages       []message       `json:"messages"`
+	MaxTokens      int             `json:"max_tokens"`
+	Temperature    float64         `json:"temperature"`
+	ResponseFormat interface{}     `json:"response_format,omitempty"`
+	Thinking       *thinkingConfig `json:"thinking,omitempty"`
 }
 
 type responseFormat struct {
@@ -61,15 +66,16 @@ type Usage struct {
 	CacheMissTokens  int
 }
 
-// DeepSeek pricing (USD per million tokens, as of 2025-Q1).
+// Pricing (USD per million tokens, off-peak baseline).
+// Peak hours (Mon-Fri 01:00-04:00 and 06:00-10:00 UTC) are 2× these rates.
 // Source: https://api-docs.deepseek.com/quick_start/pricing
 const (
-	priceReasonerCacheMiss = 0.55 // deepseek-reasoner input, cache miss
-	priceReasonerCacheHit  = 0.14 // deepseek-reasoner input, cache hit
-	priceReasonerOutput    = 2.19 // deepseek-reasoner output
-	priceChatCacheMiss     = 0.27 // deepseek-chat input, cache miss
-	priceChatCacheHit      = 0.07 // deepseek-chat input, cache hit
-	priceChatOutput        = 1.10 // deepseek-chat output
+	priceDiscoveryCacheMiss = 0.66  // deepseek-v4-pro input, cache miss (off-peak)
+	priceDiscoveryCacheHit  = 0.022 // deepseek-v4-pro input, cache hit  (off-peak)
+	priceDiscoveryOutput    = 1.98  // deepseek-v4-pro output             (off-peak)
+	priceAuditCacheMiss     = 0.15  // deepseek-flash input, cache miss   (off-peak)
+	priceAuditCacheHit      = 0.003 // deepseek-flash input, cache hit    (off-peak)
+	priceAuditOutput        = 0.60  // deepseek-flash output              (off-peak)
 )
 
 // CostUSD returns the estimated USD cost for a Usage at the given model's rates.
@@ -78,13 +84,13 @@ func CostUSD(u Usage, model string) float64 {
 	const m = 1_000_000.0
 	switch model {
 	case modelDiscovery:
-		return (float64(u.CacheMissTokens)*priceReasonerCacheMiss+
-			float64(u.CacheHitTokens)*priceReasonerCacheHit)/m +
-			float64(u.CompletionTokens)*priceReasonerOutput/m
-	default: // modelAudit (deepseek-chat)
-		return (float64(u.CacheMissTokens)*priceChatCacheMiss+
-			float64(u.CacheHitTokens)*priceChatCacheHit)/m +
-			float64(u.CompletionTokens)*priceChatOutput/m
+		return (float64(u.CacheMissTokens)*priceDiscoveryCacheMiss+
+			float64(u.CacheHitTokens)*priceDiscoveryCacheHit)/m +
+			float64(u.CompletionTokens)*priceDiscoveryOutput/m
+	default: // modelAudit (deepseek-flash)
+		return (float64(u.CacheMissTokens)*priceAuditCacheMiss+
+			float64(u.CacheHitTokens)*priceAuditCacheHit)/m +
+			float64(u.CompletionTokens)*priceAuditOutput/m
 	}
 }
 
@@ -122,7 +128,12 @@ func (c *Client) Chat(ctx context.Context, model string, messages []message, jso
 		MaxTokens:   maxTokens,
 		Temperature: 0.1,
 	}
-	// Reasoner does not support json_object mode
+	// deepseek-v4-pro requires explicit opt-in for thinking mode; without it
+	// the model behaves as a plain chat model and loses all reasoning capability.
+	if model == modelDiscovery {
+		req.Thinking = &thinkingConfig{Type: "enabled"}
+	}
+	// Thinking models do not support json_object response format.
 	if jsonMode && model != modelDiscovery {
 		req.ResponseFormat = &responseFormat{Type: "json_object"}
 	}
