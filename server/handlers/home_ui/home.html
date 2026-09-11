@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ciotx — AI Security Auditor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #ffffff;
+  --text-h: #111111;
+  --text-b: #555555;
+  --accent: #0066FF;
+  --border: #e5e5e5;
+  --code-bg: #f5f5f5;
+  --radius: 6px;
+  --max: 1100px;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text-b);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Layout ─────────────────────────────────────────────────────── */
+.container { max-width: var(--max); margin: 0 auto; padding: 0 32px; }
+@media (max-width: 640px) { .container { padding: 0 20px; } }
+
+/* ── Nav ─────────────────────────────────────────────────────────── */
+nav {
+  border-bottom: 1px solid var(--border);
+  padding: 18px 0;
+}
+.nav-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: 0 32px;
+}
+@media (max-width: 640px) { .nav-inner { padding: 0 20px; } }
+
+.logo {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-h);
+  letter-spacing: -0.4px;
+  text-decoration: none;
+}
+.nav-cta {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--accent);
+  text-decoration: none;
+  border: 1px solid var(--border);
+  padding: 7px 16px;
+  border-radius: var(--radius);
+  transition: border-color 0.15s, color 0.15s;
+}
+.nav-cta:hover { border-color: var(--accent); }
+
+/* ── Hero ────────────────────────────────────────────────────────── */
+.hero {
+  padding: 96px 0 80px;
+  max-width: 720px;
+}
+.hero h1 {
+  font-size: clamp(36px, 5vw, 56px);
+  font-weight: 700;
+  color: var(--text-h);
+  letter-spacing: -1.5px;
+  line-height: 1.1;
+  margin-bottom: 24px;
+}
+.hero p {
+  font-size: 18px;
+  color: var(--text-b);
+  line-height: 1.7;
+  margin-bottom: 40px;
+  max-width: 580px;
+}
+.install-block {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  background: var(--code-bg);
+  margin-bottom: 32px;
+  max-width: 520px;
+}
+.install-block code {
+  font-family: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', monospace;
+  font-size: 14px;
+  color: var(--text-h);
+  flex: 1;
+  user-select: all;
+}
+.copy-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 500;
+  color: var(--text-b);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+.copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+.cta-btn {
+  display: inline-block;
+  background: var(--accent);
+  color: #ffffff;
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 12px 28px;
+  border-radius: var(--radius);
+  transition: opacity 0.15s;
+}
+.cta-btn:hover { opacity: 0.88; }
+
+/* ── Section ─────────────────────────────────────────────────────── */
+.section {
+  padding: 72px 0;
+  border-top: 1px solid var(--border);
+}
+.section-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 16px;
+}
+.section h2 {
+  font-size: clamp(24px, 3vw, 32px);
+  font-weight: 700;
+  color: var(--text-h);
+  letter-spacing: -0.6px;
+  margin-bottom: 48px;
+}
+
+/* ── How It Works ────────────────────────────────────────────────── */
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 32px;
+}
+@media (max-width: 768px) { .steps { grid-template-columns: 1fr; gap: 24px; } }
+
+.step {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px;
+}
+.step-num {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--accent);
+  margin-bottom: 12px;
+}
+.step h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-h);
+  margin-bottom: 8px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+.step.no-mono h3 { font-family: inherit; }
+.step p { font-size: 14px; line-height: 1.6; }
+
+/* ── What It Finds ───────────────────────────────────────────────── */
+.findings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+@media (max-width: 640px) { .findings-grid { grid-template-columns: 1fr; } }
+
+.finding-item {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  font-size: 14px;
+  color: var(--text-h);
+  font-weight: 500;
+}
+.finding-item:nth-child(even) { border-right: none; }
+.finding-item:last-child, .finding-item:nth-last-child(2):nth-child(odd) { border-bottom: none; }
+.finding-cwe {
+  font-size: 11px;
+  color: var(--text-b);
+  font-weight: 400;
+  margin-left: 6px;
+}
+
+/* ── Languages ───────────────────────────────────────────────────── */
+.lang-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chip {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 5px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-h);
+}
+
+/* ── Footer ─────────────────────────────────────────────────────── */
+footer {
+  border-top: 1px solid var(--border);
+  padding: 36px 0;
+}
+.footer-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: 0 32px;
+}
+@media (max-width: 640px) { .footer-inner { padding: 0 20px; flex-direction: column; align-items: flex-start; } }
+
+.footer-left { font-size: 13px; color: var(--text-b); }
+.footer-right { display: flex; align-items: center; gap: 24px; }
+.footer-right a { font-size: 13px; color: var(--text-b); text-decoration: none; }
+.footer-right a:hover { color: var(--text-h); }
+.footer-note {
+  font-size: 12px;
+  color: var(--text-b);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+}
+</style>
+</head>
+<body>
+
+<!-- ── Navigation ─────────────────────────────────────────────────── -->
+<nav>
+  <div class="nav-inner">
+    <a class="logo" href="/">ciotx</a>
+    <a class="nav-cta" href="mailto:license@ciotx.ai">Get a License Key &rarr;</a>
+  </div>
+</nav>
+
+<!-- ── Hero ───────────────────────────────────────────────────────── -->
+<div class="container">
+  <section class="hero">
+    <h1>Find real vulnerabilities.<br>Not noise.</h1>
+    <p>ciotx runs a three-stage AI pipeline on your source code — discovery, verification, and adversarial audit — and returns only confirmed, exploitable security findings with exact file locations and remediation guidance.</p>
+
+    <div class="install-block">
+      <code id="install-cmd">curl -fsSL https://{{.Domain}}/install.sh | sh</code>
+      <button class="copy-btn" id="copy-btn" onclick="copyInstall()">Copy</button>
+    </div>
+
+    <a class="cta-btn" href="mailto:license@ciotx.ai">Get a License Key &rarr;</a>
+  </section>
+</div>
+
+<!-- ── How It Works ───────────────────────────────────────────────── -->
+<div class="container">
+  <section class="section">
+    <div class="section-label">How it works</div>
+    <h2>Three steps, zero configuration.</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">01</div>
+        <h3>ciotx scan .</h3>
+        <p>The CLI reads your source files locally. Secrets, lock files, and binaries are excluded automatically. Nothing is stored or logged on your machine.</p>
+      </div>
+      <div class="step no-mono">
+        <div class="step-num">02</div>
+        <h3>Three-pass AI analysis</h3>
+        <p>Your code is analyzed on our servers. Discovery finds candidates. Verification re-anchors each to real source lines. A skeptical second pass rejects false positives.</p>
+      </div>
+      <div class="step no-mono">
+        <div class="step-num">03</div>
+        <h3>Report delivered</h3>
+        <p>Two files appear in your directory: an interactive HTML report and a machine-readable JSON file. Every finding includes severity, CWE, exact line numbers, evidence, and remediation guidance.</p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ── What It Finds ─────────────────────────────────────────────── -->
+<div class="container">
+  <section class="section">
+    <div class="section-label">Coverage</div>
+    <h2>What ciotx finds.</h2>
+    <div class="findings-grid">
+      <div class="finding-item">SQL Injection <span class="finding-cwe">CWE-89</span></div>
+      <div class="finding-item">Cross-Site Scripting (XSS) <span class="finding-cwe">CWE-79</span></div>
+      <div class="finding-item">Command Injection <span class="finding-cwe">CWE-78</span></div>
+      <div class="finding-item">Server-Side Request Forgery <span class="finding-cwe">CWE-918</span></div>
+      <div class="finding-item">Path Traversal <span class="finding-cwe">CWE-22</span></div>
+      <div class="finding-item">Hardcoded Credentials <span class="finding-cwe">CWE-798</span></div>
+      <div class="finding-item">Insecure Deserialization <span class="finding-cwe">CWE-502</span></div>
+      <div class="finding-item">Broken Access Control <span class="finding-cwe">CWE-862</span></div>
+      <div class="finding-item">XML External Entity Injection <span class="finding-cwe">CWE-611</span></div>
+      <div class="finding-item">Cryptographic Weaknesses <span class="finding-cwe">CWE-326</span></div>
+      <div class="finding-item">Race Conditions / TOCTOU <span class="finding-cwe">CWE-362</span></div>
+      <div class="finding-item">Authentication Bypass <span class="finding-cwe">CWE-287</span></div>
+      <div class="finding-item">Insecure Direct Object Reference <span class="finding-cwe">CWE-639</span></div>
+      <div class="finding-item">Open Redirect <span class="finding-cwe">CWE-601</span></div>
+      <div class="finding-item">Business Logic Vulnerabilities <span class="finding-cwe">CWE-840</span></div>
+      <div class="finding-item">Memory Safety Issues <span class="finding-cwe">CWE-119</span></div>
+    </div>
+  </section>
+</div>
+
+<!-- ── Supported Languages ───────────────────────────────────────── -->
+<div class="container">
+  <section class="section">
+    <div class="section-label">Languages</div>
+    <h2>Supported languages.</h2>
+    <div class="lang-chips">
+      <span class="chip">Go</span>
+      <span class="chip">Python</span>
+      <span class="chip">JavaScript</span>
+      <span class="chip">TypeScript</span>
+      <span class="chip">Java</span>
+      <span class="chip">Kotlin</span>
+      <span class="chip">C#</span>
+      <span class="chip">C</span>
+      <span class="chip">C++</span>
+      <span class="chip">PHP</span>
+      <span class="chip">Ruby</span>
+      <span class="chip">Rust</span>
+      <span class="chip">Swift</span>
+      <span class="chip">Scala</span>
+      <span class="chip">Solidity</span>
+      <span class="chip">SQL</span>
+      <span class="chip">Shell / Bash</span>
+      <span class="chip">YAML</span>
+      <span class="chip">Terraform</span>
+      <span class="chip">Dockerfile</span>
+    </div>
+  </section>
+</div>
+
+<!-- ── Footer ─────────────────────────────────────────────────────── -->
+<footer>
+  <div class="footer-inner">
+    <div class="footer-left">&copy; 2026 ciotx. All rights reserved.</div>
+    <div class="footer-right">
+      <span class="footer-note">Self-hosted &mdash; your code never leaves your infrastructure</span>
+      <a href="https://github.com/iam-orsu/ciotx" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+function copyInstall() {
+  const text = document.getElementById('install-cmd').textContent;
+  const btn = document.getElementById('copy-btn');
+  navigator.clipboard.writeText(text).then(function() {
+    btn.textContent = 'Copied ✓';
+    setTimeout(function() { btn.textContent = 'Copy'; }, 2000);
+  }).catch(function() {
+    btn.textContent = 'Copy';
+  });
+}
+</script>
+</body>
+</html>

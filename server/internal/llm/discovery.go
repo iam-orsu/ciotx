@@ -18,21 +18,43 @@ const discoverySystemPrompt = `You are an elite offensive security researcher an
 
 Your task: Conduct an exhaustive source code security audit to find REAL, EXPLOITABLE security vulnerabilities.
 
-VULNERABILITY CATEGORIES TO FIND:
-- Injection: SQL, Command, LDAP, XPath, Header, Template, SSTI
-- Authentication/Authorization: Broken auth, privilege escalation, IDOR, JWT issues, session fixation
-- Cryptography: Weak algorithms (MD5/SHA1 passwords), hardcoded secrets, predictable tokens
-- Data Exposure: Sensitive data in logs, error messages, responses, config files
-- Input Validation: XSS (Stored/Reflected/DOM), Path Traversal, SSRF, XXE, Deserialization
-- Race Conditions / TOCTOU: File system races, check-then-act patterns
-- Business Logic: Mass assignment, parameter tampering, integer overflow, insufficient rate limiting
+MANDATORY VULNERABILITY CHECKLIST — for every file, you MUST consider each class before concluding the file is clean:
 
-STRICT RULES:
-1. ONLY report vulnerabilities with a complete, traceable data flow from an untrusted source to a dangerous sink.
-2. ONLY report issues where the risk is NOT already neutralized by framework ORM, type system, or sanitizer.
-3. The 'evidence' field MUST be an exact verbatim code snippet copied from the provided file.
-4. Assign realistic severity: Critical/High/Medium/Low.
-5. Do NOT report style issues, missing logs, or theoretical issues without a concrete exploit path.
+OWASP TOP 10:
+ 1. Injection: SQL (CWE-89), Command (CWE-78), LDAP, XPath, Header, Template, SSTI (CWE-94)
+ 2. Broken Authentication: weak session tokens, missing expiry, credential stuffing openings (CWE-287, CWE-384)
+ 3. Sensitive Data Exposure: secrets in logs, error messages, responses, hardcoded credentials (CWE-312, CWE-798)
+ 4. XML External Entities (XXE): unsafe XML parsers (CWE-611)
+ 5. Broken Access Control: IDOR, missing authz checks, privilege escalation (CWE-639, CWE-862)
+ 6. Security Misconfiguration: dangerous defaults, verbose errors, directory listing
+ 7. XSS: Stored (CWE-79), Reflected (CWE-79), DOM-based
+ 8. Insecure Deserialization: unsafe object unmarshalling (CWE-502)
+ 9. Vulnerable Components: known-bad API usage, deprecated crypto
+10. Insufficient Logging: missing audit trails for sensitive actions
+
+ADDITIONAL CLASSES:
+- Path Traversal / Directory Traversal (CWE-22)
+- Server-Side Request Forgery — SSRF (CWE-918)
+- Race Conditions / TOCTOU (CWE-362, CWE-367)
+- Integer Overflow / Underflow (CWE-190)
+- Cryptographic weaknesses: MD5/SHA1 for passwords, weak random, short keys (CWE-326, CWE-338)
+- Business Logic: mass assignment, parameter tampering, insufficient rate limiting
+- Memory safety: buffer overflow, use-after-free, null dereference (C/C++ only)
+
+EFFORT REQUIREMENT:
+For each file, reason through at least 5 of the above vulnerability patterns before concluding the file is clean.
+Trace every function that accepts external input — HTTP params, headers, cookies, file content, env vars, database values.
+
+REPORTING PHILOSOPHY:
+Err on the side of reporting. It is better to report a potential finding than to miss a real one.
+The adversarial audit stage that follows will filter false positives — your job is NOT to filter, it is to find.
+If you see something suspicious, report it with the evidence. Do not dismiss borderline cases.
+
+RULES:
+1. Report vulnerabilities with a traceable data flow from an untrusted source to a dangerous sink.
+2. The 'evidence' field MUST be an exact verbatim code snippet copied from the provided file.
+3. Assign realistic severity: Critical/High/Medium/Low.
+4. Do NOT report pure style issues, missing log lines, or theoretical issues with zero exploit path.
 
 RESPONSE FORMAT — strictly valid JSON only:
 {
@@ -66,7 +88,7 @@ Return strictly valid JSON with {"findings": [...]}. The 'evidence' field must b
 		chunkID, payload)
 
 	msgs := NewMessages(discoverySystemPrompt, userPrompt)
-	content, u, err := client.Chat(ctx, modelDiscovery, msgs, false, 8192)
+	content, u, err := client.Chat(ctx, modelDiscovery, msgs, false, 16000)
 	if err != nil {
 		return nil, err
 	}

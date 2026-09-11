@@ -100,6 +100,9 @@ func main() {
 	// ── Routes ───────────────────────────────────────────────────────
 	mux := http.NewServeMux()
 
+	// ── Public marketing homepage ─────────────────────────────────
+	mux.HandleFunc("/", handlers.RecoveryMiddleware(handlers.HomeHandler))
+
 	mux.HandleFunc("/health", handlers.RecoveryMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

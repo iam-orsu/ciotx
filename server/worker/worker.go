@@ -184,8 +184,9 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 		return 0, nil
 	}
 
-	// ── 8. Generate fixes and open PRs ──────────────────────────────
-	// Only Critical and High findings get automated PRs, and we cap at maxPRsPerScan.
+	// ── 8. Open informational PRs for Critical and High findings ────
+	// PRs contain zero source-code changes — they are purely informational,
+	// describing the finding and recommending remediation to the developer.
 	eligibleSeverities := map[string]bool{"Critical": true, "High": true}
 	baseSHA, err := gh.GetDefaultBranchSHA(ctx, token, owner, repo, job.DefaultBranch)
 	if err != nil {
@@ -206,10 +207,10 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 			continue
 		}
 
-		prURL, err := createFixPR(ctx, log, llmClient, token, owner, repo,
+		prURL, err := createInfoPR(ctx, log, llmClient, token, owner, repo,
 			job.DefaultBranch, baseSHA, finding, fileContent)
 		if err != nil {
-			log.Warn("fix PR failed", "finding", finding.CWE, "file", finding.File, "error", err)
+			log.Warn("info PR failed", "finding", finding.CWE, "file", finding.File, "error", err)
 			continue
 		}
 		log.Info("PR opened", "url", prURL, "cwe", finding.CWE)
@@ -219,9 +220,10 @@ func runJob(ctx context.Context, log *slog.Logger, job *db.ScanJob) (int, error)
 	return prsOpened, nil
 }
 
-// createFixPR generates a fix with the LLM and opens a GitHub PR for one finding.
-// llmClient is passed in from the caller to avoid allocating a new HTTP client per PR.
-func createFixPR(
+// createInfoPR opens a purely informational GitHub PR for one finding.
+// The branch contains zero source-file modifications — only an empty commit
+// so that GitHub accepts the PR. The PR body is LLM-generated guidance.
+func createInfoPR(
 	ctx context.Context,
 	log *slog.Logger,
 	llmClient *llm.Client,
@@ -229,19 +231,28 @@ func createFixPR(
 	finding *types.Finding,
 	fileContent string,
 ) (string, error) {
-	// Generate fix.
-	fix, err := llm.RunFix(ctx, llmClient, finding, fileContent)
+	// Generate the PR body via LLM; fall back to plain text on failure.
+	prBody, err := llm.RunPRBody(ctx, llmClient, finding, fileContent)
 	if err != nil {
-		return "", fmt.Errorf("fix generation: %w", err)
+		log.Warn("PR body generation failed — using fallback", "error", err)
 	}
 
-	// Sanity check: don't commit a fix that is identical to the original.
-	if strings.TrimSpace(fix.FixedContent) == strings.TrimSpace(fileContent) {
-		return "", fmt.Errorf("LLM produced no change for %s", finding.File)
+	// PR title: [ciotx] Security finding: <CWE-ID> in <filename>
+	filename := finding.File
+	if i := strings.LastIndexByte(filename, '/'); i >= 0 {
+		filename = filename[i+1:]
+	}
+	cweID := finding.CWE
+	if i := strings.Index(cweID, ":"); i >= 0 {
+		cweID = strings.TrimSpace(cweID[:i])
+	}
+	prTitle := fmt.Sprintf("[ciotx] Security finding: %s in %s", cweID, filename)
+	if len(prTitle) > 72 {
+		prTitle = prTitle[:72]
 	}
 
 	// Create a uniquely-named branch.
-	branchName := fmt.Sprintf("ciotx/fix-%s-%s",
+	branchName := fmt.Sprintf("ciotx/finding-%s-%s",
 		gh.SanitizeBranchName(finding.CWE),
 		randomHex(4),
 	)
@@ -250,23 +261,16 @@ func createFixPR(
 	}
 	log.Info("branch created", "branch", branchName)
 
-	// Get the current blob SHA for the file (required by GitHub's update file API).
-	fileSHA, err := gh.GetFileSHA(ctx, token, owner, repo, finding.File, defaultBranch)
-	if err != nil {
-		return "", fmt.Errorf("get file SHA for %s: %w", finding.File, err)
+	// Add an empty commit so GitHub accepts the PR (head != base is required).
+	// Zero source files are modified — the tree is identical to the parent commit.
+	emptyMsg := fmt.Sprintf("chore: ciotx security finding — %s in %s (no code changes)",
+		cweID, filename)
+	if err := gh.CreateEmptyCommit(ctx, token, owner, repo, branchName, baseSHA, emptyMsg); err != nil {
+		return "", fmt.Errorf("empty commit: %w", err)
 	}
 
-	// Commit the fixed file.
-	commitMsg := fmt.Sprintf("fix: %s — %s (%s:%d)",
-		finding.CWE, finding.Title, finding.File, finding.LineStart)
-	if err := gh.CommitFile(ctx, token, owner, repo,
-		finding.File, branchName, commitMsg, fix.FixedContent, fileSHA); err != nil {
-		return "", fmt.Errorf("commit fix: %w", err)
-	}
-
-	// Open the PR.
-	prURL, err := gh.OpenPR(ctx, token, owner, repo,
-		fix.PRTitle, fix.PRBody, branchName, defaultBranch)
+	// Open the PR against the default branch.
+	prURL, err := gh.OpenPR(ctx, token, owner, repo, prTitle, prBody, branchName, defaultBranch)
 	if err != nil {
 		return "", fmt.Errorf("open PR: %w", err)
 	}

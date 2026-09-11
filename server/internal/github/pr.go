@@ -97,6 +97,49 @@ func OpenPR(ctx context.Context, token, owner, repo, title, body, headBranch, ba
 	return result.HTMLURL, nil
 }
 
+// CreateEmptyCommit creates a git commit with no file changes on the given branch.
+// This is required because GitHub rejects PRs where head and base point to the same commit.
+// The commit reuses the parent's tree verbatim — zero source files are modified.
+func CreateEmptyCommit(ctx context.Context, token, owner, repo, branchName, baseSHA, message string) error {
+	// Fetch the tree SHA from the base commit.
+	commitURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/git/commits/%s", owner, repo, baseSHA)
+	body, err := ghGet(ctx, token, commitURL)
+	if err != nil {
+		return fmt.Errorf("get base commit: %w", err)
+	}
+	var baseCommit struct {
+		Tree struct {
+			SHA string `json:"sha"`
+		} `json:"tree"`
+	}
+	if err := json.Unmarshal(body, &baseCommit); err != nil {
+		return fmt.Errorf("parse base commit: %w", err)
+	}
+
+	// Create a new commit with the same tree (no file changes).
+	var newCommit struct {
+		SHA string `json:"sha"`
+	}
+	if err := ghPost(ctx, token,
+		fmt.Sprintf("https://api.github.com/repos/%s/%s/git/commits", owner, repo),
+		map[string]interface{}{
+			"message": message,
+			"tree":    baseCommit.Tree.SHA,
+			"parents": []string{baseSHA},
+		},
+		http.StatusCreated, &newCommit); err != nil {
+		return fmt.Errorf("create empty commit: %w", err)
+	}
+
+	// Advance the branch ref to the new commit.
+	if err := ghPatch(ctx, token,
+		fmt.Sprintf("https://api.github.com/repos/%s/%s/git/refs/heads/%s", owner, repo, branchName),
+		map[string]interface{}{"sha": newCommit.SHA}); err != nil {
+		return fmt.Errorf("update branch ref: %w", err)
+	}
+	return nil
+}
+
 // SanitizeBranchName converts a CWE string like "CWE-89" into a valid branch segment.
 func SanitizeBranchName(s string) string {
 	s = strings.ToLower(s)
@@ -110,6 +153,34 @@ func SanitizeBranchName(s string) string {
 }
 
 // ── internal HTTP helpers ──────────────────────────────────────────────────
+
+func ghPatch(ctx context.Context, token, url string, payload interface{}) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "ciotx-server/1.0")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("GitHub PATCH %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GitHub PATCH %s: HTTP %d: %s", url, resp.StatusCode, respBody)
+	}
+	return nil
+}
 
 func ghPost(ctx context.Context, token, url string, payload interface{}, expectStatus int, result interface{}) error {
 	body, err := json.Marshal(payload)
