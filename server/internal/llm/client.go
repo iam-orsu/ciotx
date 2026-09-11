@@ -16,8 +16,8 @@ import (
 // internal constants — never logged, never returned to users
 const (
 	providerEndpoint = "https://api.deepseek.com/chat/completions"
-	modelDiscovery   = "deepseek-flash" // fast discovery pass
-	modelAudit       = "deepseek-flash" // fast skeptical second pass
+	modelDiscovery   = "deepseek-v4-pro" // reasoning model — thorough discovery
+	modelAudit       = "deepseek-flash"  // fast skeptical second pass
 )
 
 type message struct {
@@ -83,11 +83,16 @@ const (
 // model must be one of the model* constants exported by this package.
 func CostUSD(u Usage, model string) float64 {
 	const m = 1_000_000.0
-	// Both discovery and audit currently use deepseek-flash; always use audit rates.
-	_ = model
-	return (float64(u.CacheMissTokens)*priceAuditCacheMiss+
-		float64(u.CacheHitTokens)*priceAuditCacheHit)/m +
-		float64(u.CompletionTokens)*priceAuditOutput/m
+	switch model {
+	case modelDiscovery:
+		return (float64(u.CacheMissTokens)*priceDiscoveryCacheMiss+
+			float64(u.CacheHitTokens)*priceDiscoveryCacheHit)/m +
+			float64(u.CompletionTokens)*priceDiscoveryOutput/m
+	default: // modelAudit (deepseek-flash)
+		return (float64(u.CacheMissTokens)*priceAuditCacheMiss+
+			float64(u.CacheHitTokens)*priceAuditCacheHit)/m +
+			float64(u.CompletionTokens)*priceAuditOutput/m
+	}
 }
 
 // Client is the internal LLM provider client.
@@ -124,7 +129,15 @@ func (c *Client) Chat(ctx context.Context, model string, messages []message, jso
 		MaxTokens:   maxTokens,
 		Temperature: 0.1,
 	}
-	if jsonMode {
+	// deepseek-v4-pro requires explicit opt-in for thinking; without it the model
+	// loses its reasoning capability and behaves as a plain chat model.
+	// reasoning_effort=low keeps scan time ~3-4 min; high exceeds 10 min per chunk.
+	if model == modelDiscovery {
+		req.Thinking = &thinkingConfig{Type: "enabled"}
+		req.ReasoningEffort = "low"
+	}
+	// Thinking models do not support json_object response format.
+	if jsonMode && model != modelDiscovery {
 		req.ResponseFormat = &responseFormat{Type: "json_object"}
 	}
 
