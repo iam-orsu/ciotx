@@ -226,6 +226,7 @@ func AdminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 // if that returns 401 the login form is shown. Cookie is set by AdminLoginHandler.
 func AdminUIHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store, private")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "same-origin")

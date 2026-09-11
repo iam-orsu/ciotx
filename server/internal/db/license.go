@@ -12,17 +12,17 @@ import (
 
 // License is a customer license record.
 type License struct {
-	ID               string
-	LicenseKey       string
-	Organization     string
-	Email            string
-	Plan             string
-	MaxScansPerMonth int
-	ScansThisMonth   int
-	ScanMonth        string // "YYYY-MM" — which month ScansThisMonth counts
-	IsActive         bool
-	ExpiresAt        *time.Time
-	CreatedAt        time.Time
+	ID               string     `json:"id"`
+	LicenseKey       string     `json:"license_key"`
+	Organization     string     `json:"organization"`
+	Email            string     `json:"email"`
+	Plan             string     `json:"plan"`
+	MaxScansPerMonth int        `json:"max_scans_per_month"`
+	ScansThisMonth   int        `json:"scans_this_month"`
+	ScanMonth        string     `json:"scan_month"`
+	IsActive         bool       `json:"is_active"`
+	ExpiresAt        *time.Time `json:"expires_at"`
+	CreatedAt        time.Time  `json:"created_at"`
 }
 
 // IsQuotaExceeded returns true if the license has used all its scans this calendar month.

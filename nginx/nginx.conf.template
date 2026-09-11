@@ -165,6 +165,22 @@ server {
         add_header Cache-Control       "public, max-age=3600";
     }
 
+    # ── Marketing homepage + catch-all (Go server) ─────────────────
+    # Must come AFTER all specific location blocks so it is only reached
+    # when nothing else matches. The Go HomeHandler serves / and returns
+    # 404 for any other unmatched path.
+    location / {
+        proxy_pass         http://$api_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   Connection        "";
+        proxy_read_timeout 10s;
+        proxy_send_timeout 10s;
+    }
+
     # ── Block common scanner/probe paths ───────────────────────────
     location ~ ^/(wp-admin|\.env|\.git|phpinfo) {
         return 404;

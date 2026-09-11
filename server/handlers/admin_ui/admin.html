@@ -660,9 +660,15 @@ tr:hover td { background: var(--surface); }
 
   copyKeyBtn.addEventListener('click', function() {
     const key = newKeyValue.textContent;
+    if (!navigator.clipboard) {
+      showToast('Copy not available — select and copy manually', 'err');
+      return;
+    }
     navigator.clipboard.writeText(key).then(function() {
       copyKeyBtn.textContent = 'Copied ✓';
       setTimeout(function() { copyKeyBtn.textContent = 'Copy'; }, 2000);
+    }).catch(function() {
+      showToast('Copy failed — select and copy manually', 'err');
     });
   });
 
