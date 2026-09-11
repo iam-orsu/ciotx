@@ -33,6 +33,8 @@ var IgnoreDirs = map[string]bool{
 var IgnoreFiles = map[string]bool{
 	"package-lock.json": true, "yarn.lock": true, "pnpm-lock.yaml": true,
 	"poetry.lock": true, "Pipfile.lock": true, "Cargo.lock": true,
+	// ciotx own output files — never scan our own reports
+	"ciotx-findings.json": true, "ciotx-report.pdf": true,
 }
 
 // SourceFile holds the content and metadata for a single scanned file.
