@@ -204,12 +204,12 @@ if ! command -v go &>/dev/null; then
     curl -fsSL "https://dl.google.com/go/${GO_TAR}" -o "/tmp/${GO_TAR}"
     rm -rf /usr/local/go
     tar -C /usr/local -xzf "/tmp/${GO_TAR}"
-    export PATH="/usr/local/go/bin:$PATH"
     rm "/tmp/${GO_TAR}"
-    success "Go $(go version | awk '{print $3}') installed."
-else
-    success "Go $(go version | awk '{print $3}') already installed."
+    success "Go installed."
 fi
+# Always ensure the standard Go install location is in PATH.
+export PATH="/usr/local/go/bin:$PATH"
+success "Go $(go version | awk '{print $3}') ready."
 
 DIST_DIR="./dist"
 mkdir -p "$DIST_DIR"
@@ -306,7 +306,7 @@ echo "  Get your license key at \${CIOTX_DOMAIN}"
 echo ""
 INSTALL_SCRIPT
 
-chmod +x ./scripts/install.sh
+chmod +x ./scripts/install.sh ./scripts/update.sh
 success "install.sh generated with domain: ${DOMAIN_NAME}"
 
 # ── Copy built binaries to nginx static dir for serving ──────────────
@@ -385,6 +385,9 @@ echo -e "  ${BLUE}docker compose exec api /ciotx-server license create --org \"A
 echo ""
 echo -e "  ${BOLD}List all licenses:${NC}"
 echo -e "  ${BLUE}docker compose exec api /ciotx-server license list${NC}"
+echo ""
+echo -e "  ${BOLD}To update after pushing new code:${NC}"
+echo -e "  ${BLUE}sudo ./scripts/update.sh${NC}      # pull + rebuild CLI + restart server"
 echo ""
 echo -e "  ${BOLD}Useful commands:${NC}"
 echo -e "  ${BLUE}docker compose logs -f api${NC}    # live API logs"
