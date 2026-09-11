@@ -60,7 +60,7 @@ func RunPRBody(ctx context.Context, c *Client, findings []*types.Finding, fileCo
 			"**%d problem(s) found** - please read and fix before merging.\n\n"+
 			"---\n\n"+
 			"For EACH finding, write a section using this layout:\n\n"+
-			"### Problem %d of %d: <Title> (<CWE>) - **<Severity>**\n\n"+
+			"### Problem 1 of %d: <Title> (<CWE>) - **<Severity>**\n\n"+
 			"**File:** `<file>`, lines <start>-<end>\n\n"+
 			"#### The code that has the problem\n"+
 			"```\n<evidence>\n```\n\n"+
@@ -78,7 +78,7 @@ func RunPRBody(ctx context.Context, c *Client, findings []*types.Finding, fileCo
 		len(findings), findings[0].File,
 		findingsDesc.String(),
 		findings[0].File, len(findings),
-		len(findings), len(findings),
+		len(findings),
 		findings[0].CWE,
 	)
 
