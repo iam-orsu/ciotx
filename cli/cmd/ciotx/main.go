@@ -446,7 +446,7 @@ func cmdUpdate() int {
 	tmpPath := exePath + ".update_tmp"
 	tmpFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "\n[!] Cannot write update (try sudo): %v\n", err)
+		fmt.Fprintf(os.Stderr, "\n[!] Permission denied. Run:\n\n    sudo %s update\n\n", exePath)
 		return 1
 	}
 	if _, err = io.Copy(tmpFile, dlResp.Body); err != nil {
@@ -479,7 +479,7 @@ func cmdUpdate() int {
 		// Unix: rename over a running binary is safe — the kernel keeps the old inode alive.
 		if err = os.Rename(tmpPath, exePath); err != nil {
 			os.Remove(tmpPath)
-			fmt.Fprintf(os.Stderr, "\n[!] Could not replace binary (try sudo): %v\n", err)
+			fmt.Fprintf(os.Stderr, "\n[!] Could not replace binary. Run:\n\n    sudo %s update\n\n", exePath)
 			return 1
 		}
 	}
