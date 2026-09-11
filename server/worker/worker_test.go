@@ -211,6 +211,89 @@ func TestVerifyFindings_LineEndFloor(t *testing.T) {
 	}
 }
 
+// ── groupFindingsByFile ────────────────────────────────────────────────────
+
+func TestGroupFindingsByFile_BasicGrouping(t *testing.T) {
+	eligible := map[string]bool{"Critical": true, "High": true}
+	findings := []*types.Finding{
+		{File: "app.py", Severity: "Critical", CWE: "CWE-89"},
+		{File: "db.py", Severity: "High", CWE: "CWE-78"},
+		{File: "app.py", Severity: "High", CWE: "CWE-79"},
+		{File: "db.py", Severity: "Critical", CWE: "CWE-798"},
+	}
+	groups := groupFindingsByFile(findings, eligible)
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(groups))
+	}
+	if groups[0].filePath != "app.py" {
+		t.Errorf("expected first group app.py, got %s", groups[0].filePath)
+	}
+	if len(groups[0].findings) != 2 {
+		t.Errorf("expected 2 findings in app.py group, got %d", len(groups[0].findings))
+	}
+	if groups[1].filePath != "db.py" {
+		t.Errorf("expected second group db.py, got %s", groups[1].filePath)
+	}
+	if len(groups[1].findings) != 2 {
+		t.Errorf("expected 2 findings in db.py group, got %d", len(groups[1].findings))
+	}
+}
+
+func TestGroupFindingsByFile_FiltersIneligible(t *testing.T) {
+	eligible := map[string]bool{"Critical": true, "High": true}
+	findings := []*types.Finding{
+		{File: "app.py", Severity: "Critical", CWE: "CWE-89"},
+		{File: "app.py", Severity: "Medium", CWE: "CWE-79"}, // filtered out
+		{File: "app.py", Severity: "Low", CWE: "CWE-200"},   // filtered out
+	}
+	groups := groupFindingsByFile(findings, eligible)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group (only Critical/High), got %d", len(groups))
+	}
+	if len(groups[0].findings) != 1 {
+		t.Errorf("expected 1 finding after filtering, got %d", len(groups[0].findings))
+	}
+}
+
+func TestGroupFindingsByFile_Empty(t *testing.T) {
+	groups := groupFindingsByFile(nil, map[string]bool{"Critical": true})
+	if len(groups) != 0 {
+		t.Fatalf("expected 0 groups for nil input, got %d", len(groups))
+	}
+}
+
+func TestGroupFindingsByFile_AllFilteredOut(t *testing.T) {
+	eligible := map[string]bool{"Critical": true}
+	findings := []*types.Finding{
+		{File: "a.py", Severity: "Low"},
+		{File: "b.py", Severity: "Medium"},
+	}
+	groups := groupFindingsByFile(findings, eligible)
+	if len(groups) != 0 {
+		t.Fatalf("expected 0 groups, got %d", len(groups))
+	}
+}
+
+func TestGroupFindingsByFile_PreservesOrder(t *testing.T) {
+	eligible := map[string]bool{"Critical": true, "High": true}
+	findings := []*types.Finding{
+		{File: "z.py", Severity: "Critical"},
+		{File: "a.py", Severity: "High"},
+		{File: "m.py", Severity: "Critical"},
+	}
+	groups := groupFindingsByFile(findings, eligible)
+	if len(groups) != 3 {
+		t.Fatalf("expected 3 groups, got %d", len(groups))
+	}
+	// Order should match first-seen order.
+	expected := []string{"z.py", "a.py", "m.py"}
+	for i, g := range groups {
+		if g.filePath != expected[i] {
+			t.Errorf("group[%d]: expected %s, got %s", i, expected[i], g.filePath)
+		}
+	}
+}
+
 // ── randomHex ─────────────────────────────────────────────────────────────
 
 func TestRandomHex_Length(t *testing.T) {

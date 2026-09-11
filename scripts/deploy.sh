@@ -199,8 +199,8 @@ header "Step 4 — Building CLI Binaries"
 
 # Require Go to be installed on the build machine (the VPS)
 if ! command -v go &>/dev/null; then
-    info "Go not found — installing Go 1.25..."
-    GO_TAR="go1.25.0.linux-amd64.tar.gz"
+    info "Go not found — installing Go 1.27..."
+    GO_TAR="go1.27.0.linux-amd64.tar.gz"
     curl -fsSL "https://dl.google.com/go/${GO_TAR}" -o "/tmp/${GO_TAR}"
     rm -rf /usr/local/go
     tar -C /usr/local -xzf "/tmp/${GO_TAR}"

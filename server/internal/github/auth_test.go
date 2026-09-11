@@ -142,10 +142,10 @@ func TestSanitizeBranchName(t *testing.T) {
 		{"CWE-89", "cwe-89"},
 		{"already-clean", "already-clean"},
 		{"UPPER", "upper"},
-		{"CWE 89", "cwe89"},        // spaces are dropped, not replaced
-		{"CWE_79", "cwe79"},        // underscores are dropped
-		{"CWE!@#$79", "cwe79"},     // special chars dropped
-		{"CWE-78:cmd", "cwe-78cmd"},// colon dropped
+		{"CWE 89", "cwe89"},         // spaces are dropped, not replaced
+		{"CWE_79", "cwe79"},         // underscores are dropped
+		{"CWE!@#$79", "cwe79"},      // special chars dropped
+		{"CWE-78:cmd", "cwe-78cmd"}, // colon dropped
 		{"", ""},
 	}
 	for _, c := range cases {
@@ -153,5 +153,39 @@ func TestSanitizeBranchName(t *testing.T) {
 		if got != c.want {
 			t.Errorf("SanitizeBranchName(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// ── SanitizeFilePath ──────────────────────────────────────────────────────
+
+func TestSanitizeFilePath(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"src/api/database.py", "src-api-database-py"},
+		{"app.py", "app-py"},
+		{"src/auth/login.go", "src-auth-login-go"},
+		{"UPPER/FILE.GO", "upper-file-go"},
+		{"a//b///c", "a-b-c"},      // consecutive separators collapse to one dash
+		{"/leading/slash", "leading-slash"},
+		{"trailing/slash/", "trailing-slash"},
+		{"a.b.c.d", "a-b-c-d"},     // dots become dashes
+		{"", ""},
+	}
+	for _, c := range cases {
+		got := SanitizeFilePath(c.in)
+		if got != c.want {
+			t.Errorf("SanitizeFilePath(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestSanitizeFilePath_LengthCap(t *testing.T) {
+	// Paths longer than 200 chars should be truncated.
+	long := ""
+	for i := 0; i < 250; i++ {
+		long += "a"
+	}
+	got := SanitizeFilePath(long)
+	if len(got) > 200 {
+		t.Fatalf("expected len ≤ 200, got %d", len(got))
 	}
 }

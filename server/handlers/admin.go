@@ -323,6 +323,14 @@ func AdminListLicensesHandler(w http.ResponseWriter, r *http.Request) {
 	if licenses == nil {
 		licenses = []*db.License{}
 	}
+	// Apply the same lazy monthly-reset logic as IsQuotaExceeded / StatusHandler:
+	// if scan_month doesn't match the current month, the counter is effectively 0.
+	currentMonth := time.Now().UTC().Format("2006-01")
+	for _, l := range licenses {
+		if l.ScanMonth != currentMonth {
+			l.ScansThisMonth = 0
+		}
+	}
 	writeJSON(w, http.StatusOK, licenses)
 }
 
