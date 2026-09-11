@@ -84,6 +84,7 @@ info "  Version = ${VERSION} (${COMMIT})"
   CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o "../dist/ciotx-windows-amd64.exe" ./cmd/ciotx && info "  [+] windows/amd64"
 )
 cp dist/ciotx-* data/static/releases/
+echo "${VERSION}" > data/static/releases/version.txt
 success "CLI binaries built and live in data/static/releases/."
 
 # ── Step 4: Regenerate install.sh with new version ───────────────────

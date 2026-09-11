@@ -9,8 +9,11 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,6 +71,9 @@ func main() {
 			}
 		}
 		os.Exit(cmdHistory(limit))
+
+	case "update":
+		os.Exit(cmdUpdate())
 
 	case "version", "--version", "-v":
 		fmt.Printf("ciotx %s (commit %s, built %s)\n", Version, Commit, BuildDate)
@@ -358,6 +364,103 @@ func formatDurationMS(ms int64) string {
 	return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
 }
 
+// =====================================================================
+// ciotx update
+// =====================================================================
+
+func cmdUpdate() int {
+	fmt.Println()
+	fmt.Println("  ciotx — Self-Update")
+	fmt.Println(strings.Repeat("─", 50))
+
+	// Fetch the latest version string from the server.
+	versionURL := APIEndpoint + "/releases/version.txt"
+	resp, err := http.Get(versionURL) //nolint:gosec // URL comes from trusted build-time constant
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\n[!] Could not reach update server: %v\n", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "\n[!] Update server returned %d — try again later.\n", resp.StatusCode)
+		return 1
+	}
+	body, _ := io.ReadAll(resp.Body)
+	latest := strings.TrimSpace(string(body))
+	if latest == "" {
+		fmt.Fprintln(os.Stderr, "\n[!] Server returned an empty version — update unavailable.")
+		return 1
+	}
+
+	fmt.Printf("  Current version : %s\n", Version)
+	fmt.Printf("  Latest version  : %s\n", latest)
+
+	if Version == latest {
+		fmt.Println("\n  [+] Already up to date.")
+		fmt.Println()
+		return 0
+	}
+
+	// Determine the binary name for this platform.
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+	binaryName := fmt.Sprintf("ciotx-%s-%s", goos, goarch)
+	if goos == "windows" {
+		binaryName += ".exe"
+	}
+	downloadURL := APIEndpoint + "/releases/" + binaryName
+
+	fmt.Printf("\n  Downloading %s...\n", binaryName)
+
+	dlResp, err := http.Get(downloadURL) //nolint:gosec
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[!] Download failed: %v\n", err)
+		return 1
+	}
+	defer dlResp.Body.Close()
+	if dlResp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "[!] Download returned HTTP %d\n", dlResp.StatusCode)
+		return 1
+	}
+
+	// Find the path of the currently running binary.
+	exePath, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[!] Cannot determine executable path: %v\n", err)
+		return 1
+	}
+	// Resolve symlinks so we write to the real file.
+	exePath, err = filepath.EvalSymlinks(exePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[!] Cannot resolve executable path: %v\n", err)
+		return 1
+	}
+
+	// Write to a temp file next to the binary, then atomically rename.
+	tmpPath := exePath + ".update_tmp"
+	tmpFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[!] Cannot write update (try sudo): %v\n", err)
+		return 1
+	}
+	if _, err = io.Copy(tmpFile, dlResp.Body); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		fmt.Fprintf(os.Stderr, "[!] Download interrupted: %v\n", err)
+		return 1
+	}
+	tmpFile.Close()
+
+	if err = os.Rename(tmpPath, exePath); err != nil {
+		os.Remove(tmpPath)
+		fmt.Fprintf(os.Stderr, "[!] Could not replace binary (try sudo): %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("\n  [+] Updated to %s — restart ciotx to use the new version.\n\n", latest)
+	return 0
+}
+
 func printHelp() {
 	fmt.Printf(`
   ciotx — Security Auditor
@@ -369,6 +472,7 @@ func printHelp() {
     ciotx status                 Show plan, quota, and account status
     ciotx history                Show recent scan history
     ciotx history --limit 20     Show up to 20 recent scans (max 50)
+    ciotx update                 Update ciotx to the latest version
     ciotx version                Print version and build info
 
   Get your license key at %s

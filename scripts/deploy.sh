@@ -313,6 +313,7 @@ success "install.sh generated with domain: ${DOMAIN_NAME}"
 RELEASES_DIR="./data/static/releases"
 mkdir -p "$RELEASES_DIR"
 cp "${DIST_DIR}"/ciotx-* "$RELEASES_DIR/"
+echo "${VERSION}" > "${RELEASES_DIR}/version.txt"
 success "Binaries copied to ${RELEASES_DIR}/ for download"
 
 # =======================================================================
