@@ -13,11 +13,8 @@ func TestCostUSD_Discovery(t *testing.T) {
 		CacheMissTokens:  800_000,
 	}
 	got := CostUSD(u, modelDiscovery)
-	// (800k * 0.55 + 200k * 0.14) / 1M + 500k * 2.19 / 1M
-	// = (440 + 28) / 1000 + 1095 / 1000
-	// = 0.468 + 1.095 = 1.563
-	want := (800_000*priceReasonerCacheMiss+200_000*priceReasonerCacheHit)/1_000_000 +
-		500_000*priceReasonerOutput/1_000_000
+	want := (800_000*priceDiscoveryCacheMiss+200_000*priceDiscoveryCacheHit)/1_000_000 +
+		500_000*priceDiscoveryOutput/1_000_000
 	if math.Abs(got-want) > 1e-9 {
 		t.Errorf("CostUSD(discovery) = %f, want %f", got, want)
 	}
@@ -31,8 +28,8 @@ func TestCostUSD_Audit(t *testing.T) {
 		CacheMissTokens:  400_000,
 	}
 	got := CostUSD(u, modelAudit)
-	want := (400_000*priceChatCacheMiss+100_000*priceChatCacheHit)/1_000_000 +
-		100_000*priceChatOutput/1_000_000
+	want := (400_000*priceAuditCacheMiss+100_000*priceAuditCacheHit)/1_000_000 +
+		100_000*priceAuditOutput/1_000_000
 	if math.Abs(got-want) > 1e-9 {
 		t.Errorf("CostUSD(audit) = %f, want %f", got, want)
 	}
